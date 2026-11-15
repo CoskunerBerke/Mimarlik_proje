@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   BuildingFunctionKey,
   CityClimateProfile,
@@ -9,9 +9,17 @@ import {
 import {
   analyzeBlockRoofPerformance,
   recommendOptimalRoofForBlock,
-  ROOF_TYPES_META,
 } from '../engine/roofEngine';
-import { Copy, Plus, Sparkles, Sun, Trash2, Zap } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Plus,
+  Sparkles,
+  Trash2,
+  Zap,
+} from 'lucide-react';
 
 interface RoofPluginPanelProps {
   city: CityClimateProfile;
@@ -24,24 +32,56 @@ interface RoofPluginPanelProps {
   onDuplicateBlock: (id: string) => void;
   onDeleteBlock: (id: string) => void;
   onOptimizeAllRoofs: () => void;
+  onNextStep: () => void;
 }
 
-const ROOF_KEYS: RoofTypeKey[] = [
-  'sawtooth',
-  'mono_pitch',
-  'asymmetric_gable',
-  'gable',
-  'butterfly',
-  'flat_green',
-  'louver_canopy',
+const SIMPLE_ROOF_CARDS: Array<{
+  key: RoofTypeKey;
+  title: string;
+  desc: string;
+}> = [
+  {
+    key: 'sawtooth',
+    title: 'Testere Dişi Kuzey Işıklığı',
+    desc: 'Kuzeyden göz yormayan aydınlık alır, güney yüzeyde elektrik üretir.',
+  },
+  {
+    key: 'mono_pitch',
+    title: 'Tek Eğimli Güneş Çatısı',
+    desc: 'Yüksek güney penceresiyle kış güneşini odanın en arkasına taşır.',
+  },
+  {
+    key: 'gable',
+    title: 'Klasik Beşik Çatı',
+    desc: 'Yoğun yağmur ve karı iki yöne hızla tahliye eder.',
+  },
+  {
+    key: 'asymmetric_gable',
+    title: 'Asimetrik İklim Çatısı',
+    desc: 'Güney kanadı güneşe, kuzey kanadı soğuk rüzgara göre eğimlidir.',
+  },
+  {
+    key: 'flat_green',
+    title: 'Yeşil Teras Çatı + Işık Feneri',
+    desc: 'Toprak katmanıyla yaz sıcağını keser, tepeden doğal ışık alır.',
+  },
+  {
+    key: 'butterfly',
+    title: 'Kelebek (V-Kesit) Çatı',
+    desc: 'Yağmur suyunu ortaya toplar, dış cephe pencerelerini yükseltir.',
+  },
+  {
+    key: 'louver_canopy',
+    title: 'Güneş Kırıcı Pergola Çatı',
+    desc: 'Açılı kanatlarla avlu ve teraslarda havadar gölge oluşturur.',
+  },
 ];
 
-const ROLE_OPTIONS: Array<{ key: SpaceZoneRole; label: string }> = [
-  { key: 'primary_living', label: 'Güney Ana Yaşam / Derslik / Pasif Solar' },
-  { key: 'north_daylight', label: 'Kuzey Homojen Günışığı / Stüdyo / Sergi' },
-  { key: 'social_atrium', label: 'Sosyal Avlu Arayüzü / Kış Bahçesi' },
-  { key: 'service_buffer', label: 'Kuzeybatı Servis / Teknik / Tampon' },
-  { key: 'circulation_core', label: 'Düşey Sirkülasyon & Çekirdek' },
+const SIMPLE_ROLES: Array<{ key: SpaceZoneRole; label: string }> = [
+  { key: 'primary_living', label: 'Güney: Güneş Alan Ana Odalar' },
+  { key: 'north_daylight', label: 'Kuzey: Aydınlık Atölye / Çalışma' },
+  { key: 'social_atrium', label: 'Merkez: Ortak Alan / Giriş' },
+  { key: 'service_buffer', label: 'Batı/Kuzey: Servis & Koridor' },
 ];
 
 export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
@@ -55,101 +95,93 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
   onDuplicateBlock,
   onDeleteBlock,
   onOptimizeAllRoofs,
+  onNextStep,
 }) => {
+  const [showSizeControls, setShowSizeControls] = useState(false);
+
   const activeBlock = blocks.find((b) => b.id === selectedBlockId) || blocks[0];
   if (!activeBlock) return null;
 
   const perf = analyzeBlockRoofPerformance(activeBlock, city);
   const optSuggestion = recommendOptimalRoofForBlock(activeBlock, city, funcKey);
 
-  const handleApplyOptimalSingle = () => {
-    onUpdateBlock({
-      ...activeBlock,
-      roofType: optSuggestion.roofType,
-      roofPitchDeg: optSuggestion.roofPitchDeg,
-      secondaryPitchDeg: optSuggestion.secondaryPitchDeg,
-      overhangSouthM: optSuggestion.overhangSouthM,
-      sawtoothCount: optSuggestion.sawtoothCount,
-      skylightRatio: optSuggestion.skylightRatio,
-      hasPvPanels: optSuggestion.hasPvPanels,
-    });
-  };
-
-  // 2D Mimari Kesit SVG Hesaplamaları (Sol=Kuzey, Sağ=Güney)
+  // Basit ve net Oda Kesiti SVG ölçüleri
   const svgW = 320;
-  const svgH = 165;
-  const groundY = 136;
-  const bLeft = 56; // Kuzey duvarı
-  const bRight = 236; // Güney duvarı
+  const svgH = 160;
+  const groundY = 132;
+  const bLeft = 52;
+  const bRight = 232;
   const bWidthPx = bRight - bLeft;
-  const wallTopY = 82;
+  const wallTopY = 78;
   const pxPerMeter = bWidthPx / Math.max(8, activeBlock.depth);
   const overPx = Math.min(36, activeBlock.overhangSouthM * pxPerMeter * 1.4);
   const risePx = Math.min(
-    36,
-    Math.max(10, Math.tan((activeBlock.roofPitchDeg * Math.PI) / 180) * 48)
+    34,
+    Math.max(10, Math.tan((activeBlock.roofPitchDeg * Math.PI) / 180) * 46)
   );
-
-  // Kış güneş ışını (Güney sağ üstten sola/içeri girer)
   const winterRad = (perf.winterNoonAltDeg * Math.PI) / 180;
   const summerRad = (perf.summerNoonAltDeg * Math.PI) / 180;
   const penPx = Math.min(bWidthPx - 6, perf.winterSunPenetrationM * pxPerMeter);
 
   return (
-    <div className="space-y-4 text-xs">
-      {/* 03.1 3D Kütle Listesi ve Yeni Kütle Ekleme */}
-      <section className="space-y-2.5 border-b border-[#E2E0D8] pb-3.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[11px] uppercase tracking-wider text-stone-500">
-            03.1 3D Kütle Modülleri ({blocks.length} Blok)
-          </span>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={onAddBlock}
-              className="px-2.5 py-1 bg-[#161615] text-white font-semibold hover:bg-stone-800 transition flex items-center gap-1 whitespace-nowrap"
-            >
-              <Plus className="w-3.5 h-3.5" /> Kütle Ekle
-            </button>
-            <button
-              onClick={onOptimizeAllRoofs}
-              className="px-2 py-1 border border-[#161615] bg-white text-[#161615] font-medium hover:bg-stone-100 transition flex items-center gap-1 whitespace-nowrap"
-              title="Tüm blokların çatı tipini ve açılarını enleme göre otomatik ayarla"
-            >
-              <Sparkles className="w-3 h-3 text-[#C85A17]" /> Tümünü Optimize Et
-            </button>
-          </div>
-        </div>
+    <div className="space-y-6 text-sm">
+      <div>
+        <h2 className="text-base font-bold text-[#161615]">
+          3. 3D Kütle Ekle & Güneşe Göre Çatı Tasarla
+        </h2>
+        <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+          Soldaki 3D modelde istediğiniz binaya tıklayın veya yeni bina ekleyin. Çatı açısını
+          değiştirdiğinizde güneşin içeri nasıl girdiğini aşağıdaki şemadan görebilirsiniz.
+        </p>
+      </div>
 
-        <div className="grid grid-cols-1 gap-1 max-h-32 overflow-y-auto pr-0.5">
+      {/* Üst Hızlı İşlem Butonları */}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={onAddBlock}
+          className="py-2.5 px-3 bg-[#161615] hover:bg-stone-800 text-white text-xs font-semibold transition flex items-center justify-center gap-1.5"
+        >
+          <Plus className="w-4 h-4" /> Yeni 3D Bina Ekle
+        </button>
+        <button
+          onClick={onOptimizeAllRoofs}
+          className="py-2.5 px-3 bg-[#C85A17] hover:bg-[#b04d12] text-white text-xs font-semibold transition flex items-center justify-center gap-1.5"
+        >
+          <Sparkles className="w-4 h-4" /> Güneşe Göre Otomatik Ayarla
+        </button>
+      </div>
+
+      {/* Sahnedeki 3D Binalar Seçicisi */}
+      <div className="space-y-1.5">
+        <label className="block text-xs font-semibold text-stone-800">
+          Düzenlenen Bina Bloğu ({blocks.length} Adet)
+        </label>
+        <div className="space-y-1.5 max-h-36 overflow-y-auto">
           {blocks.map((b, i) => {
             const isSel = b.id === activeBlock.id;
             return (
               <div
                 key={b.id}
                 onClick={() => onSelectBlock(b.id)}
-                className={`px-2.5 py-1.5 border cursor-pointer flex items-center justify-between gap-2 transition ${
+                className={`px-3 py-2 border cursor-pointer flex items-center justify-between gap-2 text-xs transition ${
                   isSel
-                    ? 'border-[#161615] bg-[#161615] text-white'
-                    : 'border-[#DEDBD0] bg-[#FAF9F5] text-[#161615] hover:bg-white'
+                    ? 'border-[#161615] bg-[#161615] text-white font-semibold'
+                    : 'border-stone-200 bg-[#FAF9F6] text-[#161615] hover:bg-white'
                 }`}
               >
-                <div className="truncate">
-                  <span className="font-mono text-[10px] opacity-75 mr-1.5">B0{i + 1}</span>
-                  <span className="font-medium">{b.label}</span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
-                  <span>
-                    {b.floors}K · {ROOF_TYPES_META[b.roofType].shortName} ({b.roofPitchDeg}°)
-                  </span>
+                <span className="truncate">
+                  Bina {i + 1}: {b.label} ({b.floors} Kat)
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       onDuplicateBlock(b.id);
                     }}
-                    className="p-0.5 opacity-75 hover:opacity-100"
-                    title="Kütleyi Kopyala"
+                    className="opacity-75 hover:opacity-100"
+                    title="Çoğalt"
                   >
-                    <Copy className="w-3 h-3" />
+                    <Copy className="w-3.5 h-3.5" />
                   </button>
                   {blocks.length > 1 && (
                     <button
@@ -157,10 +189,10 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
                         e.stopPropagation();
                         onDeleteBlock(b.id);
                       }}
-                      className="p-0.5 opacity-75 hover:text-red-400 hover:opacity-100"
-                      title="Kütleyi Sil"
+                      className="opacity-75 hover:text-red-400 hover:opacity-100"
+                      title="Sil"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
@@ -168,360 +200,135 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
             );
           })}
         </div>
-      </section>
+      </div>
 
-      {/* 03.2 Seçili 3D Kütlenin Boyut, Konum ve Fonksiyon Ayarları */}
-      <section className="space-y-2.5 border-b border-[#E2E0D8] pb-3.5">
+      {/* Çatı Şekli Seçimi */}
+      <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <span className="font-mono text-[11px] uppercase tracking-wider text-stone-500">
-            03.2 Seçili Kütle Geometrisi & Konumu
-          </span>
-          <span className="font-mono text-[11px] font-semibold text-[#161615]">
-            {Math.round(activeBlock.width * activeBlock.depth * activeBlock.floors)} m²
+          <label className="text-xs font-semibold text-stone-800">Çatı Şeklini Seçin</label>
+          <span className="text-[11px] text-[#C85A17] font-semibold">
+            Önerilen: {SIMPLE_ROOF_CARDS.find((c) => c.key === optSuggestion.roofType)?.title}
           </span>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="block text-[10px] text-stone-500 mb-0.5">Kütle Etiketi</label>
-            <input
-              type="text"
-              value={activeBlock.label}
-              onChange={(e) => onUpdateBlock({ ...activeBlock, label: e.target.value })}
-              className="w-full border border-[#CFCBC0] bg-white px-2 py-1 text-xs"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] text-stone-500 mb-0.5">Mekan Fonksiyon Zonu</label>
-            <select
-              value={activeBlock.role}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, role: e.target.value as SpaceZoneRole })
-              }
-              className="w-full border border-[#CFCBC0] bg-white px-2 py-1 text-xs"
-            >
-              {ROLE_OPTIONS.map((ro) => (
-                <option key={ro.key} value={ro.key}>
-                  {ro.label}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="grid grid-cols-1 gap-1.5">
+          {SIMPLE_ROOF_CARDS.map((rc) => {
+            const active = activeBlock.roofType === rc.key;
+            return (
+              <button
+                key={rc.key}
+                onClick={() => onUpdateBlock({ ...activeBlock, roofType: rc.key })}
+                className={`p-2.5 text-left border transition ${
+                  active
+                    ? 'border-[#161615] bg-white shadow-xs'
+                    : 'border-stone-200 bg-[#FAF9F6] hover:bg-white'
+                }`}
+              >
+                <div className="text-xs font-bold text-[#161615]">{rc.title}</div>
+                <div className="text-[11px] text-stone-600 mt-0.5">{rc.desc}</div>
+              </button>
+            );
+          })}
         </div>
+      </div>
 
-        <div className="grid grid-cols-3 gap-2.5 pt-1">
-          <div>
-            <label className="flex justify-between text-[10px] text-stone-600">
-              <span>Genişlik</span>
-              <span className="font-mono font-semibold">{activeBlock.width}m</span>
-            </label>
-            <input
-              type="range"
-              min={6}
-              max={65}
-              step={1}
-              value={activeBlock.width}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, width: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-          </div>
-          <div>
-            <label className="flex justify-between text-[10px] text-stone-600">
-              <span>Derinlik</span>
-              <span className="font-mono font-semibold">{activeBlock.depth}m</span>
-            </label>
-            <input
-              type="range"
-              min={6}
-              max={40}
-              step={0.5}
-              value={activeBlock.depth}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, depth: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-          </div>
-          <div>
-            <label className="flex justify-between text-[10px] text-stone-600">
-              <span>Kat Adedi</span>
-              <span className="font-mono font-semibold">{activeBlock.floors} Kat</span>
-            </label>
-            <input
-              type="range"
-              min={1}
-              max={10}
-              step={1}
-              value={activeBlock.floors}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, floors: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2.5">
-          <div>
-            <label className="flex justify-between text-[10px] text-stone-600">
-              <span>Konum X (D-B)</span>
-              <span className="font-mono">{activeBlock.x}m</span>
-            </label>
-            <input
-              type="range"
-              min={-45}
-              max={45}
-              step={1}
-              value={activeBlock.x}
-              onChange={(e) => onUpdateBlock({ ...activeBlock, x: Number(e.target.value) })}
-              className="w-full"
-            />
-          </div>
-          <div>
-            <label className="flex justify-between text-[10px] text-stone-600">
-              <span>Konum Z (K-G)</span>
-              <span className="font-mono">{activeBlock.z}m</span>
-            </label>
-            <input
-              type="range"
-              min={-45}
-              max={45}
-              step={1}
-              value={activeBlock.z}
-              onChange={(e) => onUpdateBlock({ ...activeBlock, z: Number(e.target.value) })}
-              className="w-full"
-            />
-          </div>
-          <div>
-            <label className="flex justify-between text-[10px] text-stone-600">
-              <span>Dönüş Açısı</span>
-              <span className="font-mono">{activeBlock.rotationDeg}°</span>
-            </label>
-            <input
-              type="range"
-              min={-90}
-              max={90}
-              step={5}
-              value={activeBlock.rotationDeg}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, rotationDeg: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* 03.3 Güneş Açısına Duyarlı Parametrik Çatı Tasarım Eklentisi */}
-      <section className="space-y-3 border-b border-[#E2E0D8] pb-3.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[11px] uppercase tracking-wider text-stone-500">
-            03.3 Solar Çatı & Günışığı Açı Optimizasyonu
-          </span>
-          <button
-            onClick={handleApplyOptimalSingle}
-            className="px-2.5 py-1 bg-[#C85A17] hover:bg-[#b04d12] text-white font-semibold transition flex items-center gap-1 whitespace-nowrap"
-          >
-            <Sun className="w-3.5 h-3.5" /> İklime Göre Çatı Öner
-          </button>
-        </div>
-
-        {/* Otomatik Çatı Öneri Notu */}
-        <div className="bg-[#F8F7F3] border-l-2 border-[#C85A17] px-2.5 py-2 text-[11px] text-stone-700">
-          <strong className="text-[#161615]">Sistemin Çatı Önerisi: </strong>
-          {optSuggestion.reasoning}
+      {/* 3 Sade Çatı Açısı ve Saçak Ayarı */}
+      <div className="bg-[#F8F7F3] border border-stone-200 p-3.5 space-y-3.5 text-xs">
+        <div>
+          <label className="flex justify-between mb-1">
+            <span className="font-semibold text-stone-700">Çatı Eğim Açısı</span>
+            <strong className="text-[#161615]">
+              {activeBlock.roofPitchDeg}° (İdeal: {Math.round(Math.abs(city.lat) * 0.78 + 3)}°)
+            </strong>
+          </label>
+          <input
+            type="range"
+            min={5}
+            max={45}
+            step={1}
+            value={activeBlock.roofPitchDeg}
+            onChange={(e) =>
+              onUpdateBlock({ ...activeBlock, roofPitchDeg: Number(e.target.value) })
+            }
+            className="w-full"
+          />
         </div>
 
         <div>
-          <label className="block text-[11px] font-medium text-stone-700 mb-1">
-            3D Çatı Tipolojisi
+          <label className="flex justify-between mb-1">
+            <span className="font-semibold text-stone-700">
+              Güney Saçak Uzantısı (Yaz Güneşini Keser)
+            </span>
+            <strong className="text-[#161615]">
+              {activeBlock.overhangSouthM} m (Önerilen: {perf.idealSouthOverhangM} m)
+            </strong>
           </label>
-          <select
-            value={activeBlock.roofType}
+          <input
+            type="range"
+            min={0}
+            max={2.5}
+            step={0.1}
+            value={activeBlock.overhangSouthM}
             onChange={(e) =>
-              onUpdateBlock({ ...activeBlock, roofType: e.target.value as RoofTypeKey })
+              onUpdateBlock({ ...activeBlock, overhangSouthM: Number(e.target.value) })
             }
-            className="w-full border border-[#CFCBC0] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#161615]"
-          >
-            {ROOF_KEYS.map((rk) => (
-              <option key={rk} value={rk}>
-                {ROOF_TYPES_META[rk].name}
-              </option>
-            ))}
-          </select>
-          <p className="text-[11px] text-stone-500 mt-1">
-            {ROOF_TYPES_META[activeBlock.roofType].description}
-          </p>
+            className="w-full"
+          />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="flex justify-between text-[11px] text-stone-600 mb-0.5">
-              <span>Güney / Ana Çatı Eğimi</span>
-              <span className="font-mono font-bold text-[#161615]">
-                {activeBlock.roofPitchDeg}°
-              </span>
-            </label>
-            <input
-              type="range"
-              min={4}
-              max={48}
-              step={1}
-              value={activeBlock.roofPitchDeg}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, roofPitchDeg: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-            <span className="text-[10px] text-stone-500 font-mono">
-              Enlem PV Optimum: {Math.round(Math.abs(city.lat) * 0.78 + 3)}°
-            </span>
-          </div>
-
-          <div>
-            <label className="flex justify-between text-[11px] text-stone-600 mb-0.5">
-              <span>Güney Saçak Çıkması</span>
-              <span className="font-mono font-bold text-[#161615]">
-                {activeBlock.overhangSouthM} m
-              </span>
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={2.6}
-              step={0.1}
-              value={activeBlock.overhangSouthM}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, overhangSouthM: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-            <span className="text-[10px] text-stone-500 font-mono">
-              21 Haz Kesim İdeali: {perf.idealSouthOverhangM} m
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="flex justify-between text-[11px] text-stone-600 mb-0.5">
-              <span>Işıklık / Clerestory Oranı</span>
-              <span className="font-mono font-semibold">
-                %{Math.round(activeBlock.skylightRatio * 100)}
-              </span>
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={0.65}
-              step={0.05}
-              value={activeBlock.skylightRatio}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, skylightRatio: Number(e.target.value) })
-              }
-              className="w-full"
-            />
-          </div>
-
-          {activeBlock.roofType === 'sawtooth' || activeBlock.roofType === 'flat_green' ? (
-            <div>
-              <label className="flex justify-between text-[11px] text-stone-600 mb-0.5">
-                <span>Testere Dişi / Fener Adedi</span>
-                <span className="font-mono font-semibold">{activeBlock.sawtoothCount}</span>
-              </label>
-              <input
-                type="range"
-                min={2}
-                max={6}
-                step={1}
-                value={activeBlock.sawtoothCount}
-                onChange={(e) =>
-                  onUpdateBlock({ ...activeBlock, sawtoothCount: Number(e.target.value) })
-                }
-                className="w-full"
-              />
-            </div>
-          ) : (
-            <div>
-              <label className="flex justify-between text-[11px] text-stone-600 mb-0.5">
-                <span>İkincil / Kuzey Açısı</span>
-                <span className="font-mono font-semibold">{activeBlock.secondaryPitchDeg}°</span>
-              </label>
-              <input
-                type="range"
-                min={15}
-                max={90}
-                step={1}
-                value={activeBlock.secondaryPitchDeg}
-                onChange={(e) =>
-                  onUpdateBlock({
-                    ...activeBlock,
-                    secondaryPitchDeg: Number(e.target.value),
-                  })
-                }
-                className="w-full"
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={activeBlock.hasPvPanels}
-              onChange={(e) =>
-                onUpdateBlock({ ...activeBlock, hasPvPanels: e.target.checked })
-              }
-              className="accent-[#161615]"
-            />
-            <span className="font-medium text-[#161615] flex items-center gap-1">
-              <Zap className="w-3.5 h-3.5 text-amber-600" /> Çatı BIPV Güneş Paneli Entegrasyonu
-            </span>
+        <div>
+          <label className="flex justify-between mb-1">
+            <span className="font-semibold text-stone-700">Çatı Penceresi / Işıklık Oranı</span>
+            <strong className="text-[#161615]">
+              %{Math.round(activeBlock.skylightRatio * 100)}
+            </strong>
           </label>
-
-          <button
-            onClick={() =>
-              onUpdateBlock({
-                ...activeBlock,
-                ridgeDirection: activeBlock.ridgeDirection === 'EW' ? 'NS' : 'EW',
-              })
+          <input
+            type="range"
+            min={0}
+            max={0.65}
+            step={0.05}
+            value={activeBlock.skylightRatio}
+            onChange={(e) =>
+              onUpdateBlock({ ...activeBlock, skylightRatio: Number(e.target.value) })
             }
-            className="px-2 py-1 border border-[#D0CDC2] bg-white text-[11px] font-mono hover:bg-stone-100"
-          >
-            Sırt: {activeBlock.ridgeDirection === 'EW' ? 'Doğu-Batı' : 'Kuzey-Güney'}
-          </button>
-        </div>
-      </section>
-
-      {/* 03.4 Canlı 2D Mimari Kesit & Güneş Işını Gölgeleme Analizi */}
-      <section className="space-y-2.5">
-        <div className="flex items-center justify-between">
-          <span className="font-mono text-[11px] uppercase tracking-wider text-stone-500">
-            03.4 Mimari Kesit Güneş Işını Analizi (Kuzey - Güney)
-          </span>
-          <span className="font-mono text-[10px] text-[#15803D] font-semibold">
-            Günışığı: %{perf.estimatedDaylightFactorPct} DF
-          </span>
+            className="w-full"
+          />
         </div>
 
-        <div className="bg-white border border-[#D8D5CA] p-2">
-          <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-40">
-            {/* Arka Plan Gökyüzü */}
+        <label className="flex items-center gap-2 pt-1 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={activeBlock.hasPvPanels}
+            onChange={(e) => onUpdateBlock({ ...activeBlock, hasPvPanels: e.target.checked })}
+            className="accent-[#161615]"
+          />
+          <span className="font-semibold text-[#161615] flex items-center gap-1">
+            <Zap className="w-3.5 h-3.5 text-amber-600" /> Çatıya Güneş Paneli Ekle (Elektrik Üret)
+          </span>
+        </label>
+      </div>
+
+      {/* Canlı Oda Kesiti: Yaz ve Kış Güneşi Nasıl Giriyor? */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold text-stone-800">
+          Oda Kesiti: Yazın Serinlik, Kışın Güneş Girişi
+        </div>
+
+        <div className="bg-white border border-stone-200 p-2">
+          <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-38">
             <rect x="0" y="0" width={svgW} height={groundY} fill="#F8F7F3" />
             <rect x="0" y={groundY} width={svgW} height={svgH - groundY} fill="#E5E2D9" />
             <line x1="10" y1={groundY} x2={svgW - 10} y2={groundY} stroke="#161615" strokeWidth="1.5" />
 
-            {/* Kış Güneşi İç Mekan Aydınlanma Halısı */}
+            {/* Kış Güneşi Odaya Giren Işık Halısı */}
             <polygon
-              points={`${bRight},${wallTopY + 12} ${bRight},${groundY} ${bRight - penPx},${groundY} ${bRight},${wallTopY + 8}`}
+              points={`${bRight},${wallTopY + 10} ${bRight},${groundY} ${bRight - penPx},${groundY} ${bRight},${wallTopY + 6}`}
               fill="#FDE68A"
-              opacity="0.55"
+              opacity="0.6"
             />
 
-            {/* Bina Kesit Kutusu */}
+            {/* Oda Kesiti */}
             <rect
               x={bLeft}
               y={wallTopY}
@@ -532,17 +339,17 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
               strokeWidth="1.5"
             />
 
-            {/* Güney Pencere Açıklığı */}
+            {/* Güney Penceresi */}
             <line
               x1={bRight}
-              y1={wallTopY + 8}
+              y1={wallTopY + 6}
               x2={bRight}
-              y2={groundY - 8}
+              y2={groundY - 6}
               stroke="#38BDF8"
               strokeWidth="3.5"
             />
 
-            {/* Parametrik Çatı Kesit Çizimi */}
+            {/* Çatı Çizimi */}
             {activeBlock.roofType === 'sawtooth' ? (
               (() => {
                 const cnt = Math.max(2, Math.min(5, activeBlock.sawtoothCount));
@@ -558,7 +365,6 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
                         stroke="#161615"
                         strokeWidth="1.2"
                       />
-                      {/* Kuzey Işıklık Camı */}
                       <line
                         x1={x0}
                         y1={wallTopY}
@@ -567,47 +373,27 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
                         stroke="#0284C7"
                         strokeWidth="2.6"
                       />
-                      {/* Difüz Kuzey Günışığı Okları */}
-                      <line
-                        x1={x0 - 8}
-                        y1={wallTopY - risePx * 0.72 - 8}
-                        x2={x0 + step * 0.45}
-                        y2={groundY - 14}
-                        stroke="#38BDF8"
-                        strokeWidth="1"
-                        strokeDasharray="2 2"
-                      />
                     </g>
                   );
                 });
               })()
             ) : activeBlock.roofType === 'mono_pitch' ? (
-              <g>
-                <polygon
-                  points={`${bLeft - 6},${wallTopY} ${bRight + overPx},${wallTopY - risePx} ${bRight},${wallTopY}`}
-                  fill="#CBD5E1"
-                  stroke="#161615"
-                  strokeWidth="1.3"
-                />
-                <line
-                  x1={bRight}
-                  y1={wallTopY - risePx + 3}
-                  x2={bRight}
-                  y2={wallTopY}
-                  stroke="#0284C7"
-                  strokeWidth="3"
-                />
-              </g>
+              <polygon
+                points={`${bLeft - 5},${wallTopY} ${bRight + overPx},${wallTopY - risePx} ${bRight},${wallTopY}`}
+                fill="#CBD5E1"
+                stroke="#161615"
+                strokeWidth="1.3"
+              />
             ) : activeBlock.roofType === 'butterfly' ? (
               <polygon
-                points={`${bLeft - 6},${wallTopY - risePx * 0.75} ${bLeft + bWidthPx / 2},${wallTopY - 3} ${bRight + overPx},${wallTopY - risePx * 0.8} ${bRight},${wallTopY} ${bLeft},${wallTopY}`}
+                points={`${bLeft - 5},${wallTopY - risePx * 0.75} ${bLeft + bWidthPx / 2},${wallTopY - 3} ${bRight + overPx},${wallTopY - risePx * 0.8} ${bRight},${wallTopY} ${bLeft},${wallTopY}`}
                 fill="#CBD5E1"
                 stroke="#161615"
                 strokeWidth="1.3"
               />
             ) : (
               <polygon
-                points={`${bLeft - 6},${wallTopY} ${
+                points={`${bLeft - 5},${wallTopY} ${
                   bLeft + (activeBlock.roofType === 'asymmetric_gable' ? bWidthPx * 0.35 : bWidthPx * 0.5)
                 },${wallTopY - risePx} ${bRight + overPx},${wallTopY}`}
                 fill="#CBD5E1"
@@ -616,7 +402,7 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
               />
             )}
 
-            {/* Güney Saçak Çizgisi */}
+            {/* Saçak */}
             <line
               x1={bRight}
               y1={wallTopY}
@@ -626,79 +412,221 @@ export const RoofPluginPanel: React.FC<RoofPluginPanelProps> = ({
               strokeWidth="2.5"
             />
 
-            {/* 21 Haziran Yaz Güneşi Işını (Saçaktan kesilir) */}
+            {/* Yaz Güneşi */}
             <line
-              x1={bRight + overPx + Math.cos(summerRad) * 58}
-              y1={wallTopY - Math.sin(summerRad) * 58}
+              x1={bRight + overPx + Math.cos(summerRad) * 52}
+              y1={wallTopY - Math.sin(summerRad) * 52}
               x2={bRight + overPx}
               y2={wallTopY}
               stroke="#D97706"
-              strokeWidth="1.8"
+              strokeWidth="2"
             />
-            <text x={svgW - 8} y="18" textAnchor="end" fontSize="9" fontWeight="700" fill="#B45309">
-              Yaz 21 Haz ({perf.summerNoonAltDeg}°)
+            <text x={svgW - 8} y="18" textAnchor="end" fontSize="9.5" fontWeight="700" fill="#B45309">
+              Yaz Güneşi ({perf.summerNoonAltDeg}° - Saçak Keser)
             </text>
 
-            {/* 21 Aralık Kış Güneşi Işını (Saçak altından içeri süzülür) */}
+            {/* Kış Güneşi */}
             <line
               x1={svgW - 6}
               y1={wallTopY + 12 - Math.tan(winterRad) * (svgW - 6 - bRight)}
               x2={bRight - penPx}
               y2={groundY}
               stroke="#EA580C"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeDasharray="4 2"
             />
             <text
               x={svgW - 8}
               y={groundY - 8}
               textAnchor="end"
-              fontSize="9"
+              fontSize="9.5"
               fontWeight="700"
               fill="#C85A17"
             >
-              Kış 21 Ara ({perf.winterNoonAltDeg}°)
+              Kış Güneşi ({perf.winterNoonAltDeg}° - İçeri Girer)
             </text>
 
-            {/* Yön ve Penetrasyon Ölçüsü */}
-            <text x="12" y="18" fontSize="9" fontWeight="700" fill="#0369A1">
-              KUZEY (Difüz Işık)
+            <text x="12" y="18" fontSize="9.5" fontWeight="700" fill="#0369A1">
+              KUZEY
             </text>
             <text
               x={bRight - penPx / 2}
-              y={groundY + 14}
+              y={groundY + 15}
               textAnchor="middle"
-              fontSize="9"
-              fontWeight="600"
+              fontSize="9.5"
+              fontWeight="700"
               fill="#161615"
             >
-              Kış Güneşi Girişi: {perf.winterSunPenetrationM} m
+              Kış Güneşi Odaya {perf.winterSunPenetrationM} m Girer
             </text>
           </svg>
         </div>
 
-        {/* Çatı Performans Özeti Kartları */}
-        <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2">
-            <span className="text-[10px] text-stone-500 block font-sans">Yaz Güneşi Blokajı</span>
-            <strong className="text-[#161615]">%{perf.summerDirectBlockPct} Engelleme</strong>
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className="bg-[#F8F7F3] border border-stone-200 p-2.5">
+            <span className="text-[11px] text-stone-500 block">Yaz Sıcağı Kesme</span>
+            <strong className="text-[#161615]">%{perf.summerDirectBlockPct}</strong>
           </div>
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2">
-            <span className="text-[10px] text-stone-500 block font-sans">Kamaşma Durumu</span>
-            <strong className="text-[#161615] font-sans text-[11px]">{perf.glareRiskLabel}</strong>
+          <div className="bg-[#F8F7F3] border border-stone-200 p-2.5">
+            <span className="text-[11px] text-stone-500 block">Kış Güneşi Girişi</span>
+            <strong className="text-[#161615]">{perf.winterSunPenetrationM} metre</strong>
           </div>
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2">
-            <span className="text-[10px] text-stone-500 block font-sans">Yıllık BIPV Elektrik</span>
+          <div className="bg-[#F8F7F3] border border-stone-200 p-2.5">
+            <span className="text-[11px] text-stone-500 block">Çatı Elektriği</span>
             <strong className="text-[#15803D]">
-              {perf.annualPvYieldKwh.toLocaleString('tr-TR')} kWh/yıl
+              {(perf.annualPvYieldKwh / 1000).toFixed(1)} MWh/yıl
             </strong>
           </div>
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2">
-            <span className="text-[10px] text-stone-500 block font-sans">Çatı Yağmur Hasadı</span>
-            <strong className="text-sky-800">{perf.rainwaterHarvestM3Yr} m³/yıl</strong>
-          </div>
         </div>
-      </section>
+      </div>
+
+      {/* İsteğe Bağlı Açılır Bölüm: Binanın Kat Sayısı, Boyutu ve Yeri */}
+      <div className="border border-stone-200 bg-[#FAF9F6]">
+        <button
+          onClick={() => setShowSizeControls((v) => !v)}
+          className="w-full px-3.5 py-2.5 flex items-center justify-between text-xs font-semibold text-stone-700 hover:bg-stone-100 transition"
+        >
+          <span>Seçili Binanın Kat Sayısını, Boyutunu ve Yerini Değiştir</span>
+          {showSizeControls ? (
+            <ChevronUp className="w-4 h-4" />
+          ) : (
+            <ChevronDown className="w-4 h-4" />
+          )}
+        </button>
+
+        {showSizeControls && (
+          <div className="p-3.5 border-t border-stone-200 space-y-3 text-xs">
+            <div>
+              <label className="block text-stone-600 mb-1">Bu Binanın Görevi</label>
+              <select
+                value={activeBlock.role}
+                onChange={(e) =>
+                  onUpdateBlock({ ...activeBlock, role: e.target.value as SpaceZoneRole })
+                }
+                className="w-full border border-stone-300 bg-white px-2.5 py-1.5"
+              >
+                {SIMPLE_ROLES.map((r) => (
+                  <option key={r.key} value={r.key}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              <div>
+                <label className="flex justify-between text-stone-600 mb-1">
+                  <span>Kat Sayısı</span>
+                  <strong>{activeBlock.floors}</strong>
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={activeBlock.floors}
+                  onChange={(e) =>
+                    onUpdateBlock({ ...activeBlock, floors: Number(e.target.value) })
+                  }
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="flex justify-between text-stone-600 mb-1">
+                  <span>Genişlik</span>
+                  <strong>{activeBlock.width}m</strong>
+                </label>
+                <input
+                  type="range"
+                  min={6}
+                  max={60}
+                  step={1}
+                  value={activeBlock.width}
+                  onChange={(e) =>
+                    onUpdateBlock({ ...activeBlock, width: Number(e.target.value) })
+                  }
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="flex justify-between text-stone-600 mb-1">
+                  <span>Derinlik</span>
+                  <strong>{activeBlock.depth}m</strong>
+                </label>
+                <input
+                  type="range"
+                  min={6}
+                  max={36}
+                  step={1}
+                  value={activeBlock.depth}
+                  onChange={(e) =>
+                    onUpdateBlock({ ...activeBlock, depth: Number(e.target.value) })
+                  }
+                  className="w-full"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              <div>
+                <label className="flex justify-between text-stone-600 mb-1">
+                  <span>Sağ / Sol</span>
+                  <strong>{activeBlock.x}m</strong>
+                </label>
+                <input
+                  type="range"
+                  min={-40}
+                  max={40}
+                  step={1}
+                  value={activeBlock.x}
+                  onChange={(e) => onUpdateBlock({ ...activeBlock, x: Number(e.target.value) })}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="flex justify-between text-stone-600 mb-1">
+                  <span>İleri / Geri</span>
+                  <strong>{activeBlock.z}m</strong>
+                </label>
+                <input
+                  type="range"
+                  min={-40}
+                  max={40}
+                  step={1}
+                  value={activeBlock.z}
+                  onChange={(e) => onUpdateBlock({ ...activeBlock, z: Number(e.target.value) })}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="flex justify-between text-stone-600 mb-1">
+                  <span>Döndür</span>
+                  <strong>{activeBlock.rotationDeg}°</strong>
+                </label>
+                <input
+                  type="range"
+                  min={-90}
+                  max={90}
+                  step={5}
+                  value={activeBlock.rotationDeg}
+                  onChange={(e) =>
+                    onUpdateBlock({ ...activeBlock, rotationDeg: Number(e.target.value) })
+                  }
+                  className="w-full"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={onNextStep}
+        className="w-full py-3 bg-[#161615] hover:bg-stone-800 text-white text-xs font-semibold transition flex items-center justify-center gap-2"
+      >
+        4. Adıma Geç: Yerel ve Sürdürülebilir Malzeme Seçimi
+        <ArrowRight className="w-4 h-4" />
+      </button>
     </div>
   );
 };

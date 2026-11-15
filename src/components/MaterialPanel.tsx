@@ -1,14 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CityClimateProfile,
   EvaluatedMaterial,
   MaterialCategoryKey,
 } from '../types/architecture';
-import {
-  AssemblySummary,
-  MATERIAL_CATEGORY_LABELS,
-} from '../engine/materialEngine';
-import { CheckCircle2, Leaf, MapPin, ShieldAlert, Sparkles, Truck } from 'lucide-react';
+import { AssemblySummary } from '../engine/materialEngine';
+import { Check, CheckCircle2, Leaf, MapPin, ShieldAlert, Sparkles, Truck } from 'lucide-react';
 
 interface MaterialPanelProps {
   city: CityClimateProfile;
@@ -19,13 +16,13 @@ interface MaterialPanelProps {
   assemblySummary: AssemblySummary;
 }
 
-const CATEGORIES: MaterialCategoryKey[] = [
-  'structure',
-  'envelope_wall',
-  'insulation',
-  'facade_shading',
-  'roof_finish',
-  'courtyard_ground',
+const SIMPLE_CATEGORIES: Array<{ key: MaterialCategoryKey; short: string; full: string }> = [
+  { key: 'envelope_wall', short: 'Dış Duvar', full: 'Dış Duvar Malzemesi' },
+  { key: 'structure', short: 'Taşıyıcı', full: 'Taşıyıcı Sistem (İskelet)' },
+  { key: 'insulation', short: 'Yalıtım', full: 'Isı ve Ses Yalıtımı' },
+  { key: 'facade_shading', short: 'Cephe', full: 'Dış Cephe & Güneş Kırıcı' },
+  { key: 'roof_finish', short: 'Çatı', full: 'Çatı Kaplama Malzemesi' },
+  { key: 'courtyard_ground', short: 'Avlu Zemini', full: 'Avlu ve Bahçe Zemini' },
 ];
 
 export const MaterialPanel: React.FC<MaterialPanelProps> = ({
@@ -36,179 +33,166 @@ export const MaterialPanel: React.FC<MaterialPanelProps> = ({
   onResetOptimalMaterials,
   assemblySummary,
 }) => {
+  const [activeCat, setActiveCat] = useState<MaterialCategoryKey>('envelope_wall');
+  const activeCatMeta = SIMPLE_CATEGORIES.find((c) => c.key === activeCat)!;
+  const visibleMaterials = evaluatedMaterials.filter((e) => e.material.category === activeCat);
+
   return (
-    <div className="space-y-4 text-xs">
-      {/* 04.1 Kabuk Sürdürülebilirlik & TS 825 Isıl Performans Özeti */}
-      <section className="space-y-2.5 border-b border-[#E2E0D8] pb-4">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[11px] uppercase tracking-wider text-stone-500">
-            04.1 Kabuk LCA Karbon & TS 825 Analizi
+    <div className="space-y-6 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-bold text-[#161615]">
+            4. Yerel ve Çevre Dostu Malzemeler
+          </h2>
+          <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+            {city.name} bölgesine yakın üretilen, iklime dayanıklı ve doğaya en az karbon salan
+            malzeme önerileri.
+          </p>
+        </div>
+        <button
+          onClick={onResetOptimalMaterials}
+          className="px-3 py-2 bg-[#161615] text-white text-xs font-semibold hover:bg-stone-800 transition flex items-center gap-1.5 shrink-0"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Otomatik Seç
+        </button>
+      </div>
+
+      {/* Herkesin Anlayacağı 3'lü Sürdürülebilirlik Özeti */}
+      <div className="grid grid-cols-3 gap-2.5 text-xs">
+        <div className="bg-[#F8F7F3] border border-stone-200 p-3">
+          <span className="text-stone-500 block mb-1">Isı Koruma</span>
+          {assemblySummary.passesTs825 ? (
+            <strong className="text-[#15803D] flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> İklime Uygun
+            </strong>
+          ) : (
+            <strong className="text-amber-700 flex items-center gap-1">
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" /> Yalıtım Artmalı
+            </strong>
+          )}
+          <span className="text-[11px] text-stone-500 block mt-1">
+            Isıyı {assemblySummary.thermalLagHours} saat geciktirir
           </span>
-          <button
-            onClick={onResetOptimalMaterials}
-            className="px-2.5 py-1 bg-[#161615] text-white font-medium hover:bg-stone-800 transition flex items-center gap-1 whitespace-nowrap"
-          >
-            <Sparkles className="w-3 h-3 text-amber-400" /> İklime En Uygun Kombinasyon
-          </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-stone-500">Duvar U-Değeri</span>
-              {assemblySummary.passesTs825 ? (
-                <span className="text-[10px] font-semibold text-[#15803D] flex items-center gap-0.5">
-                  <CheckCircle2 className="w-3 h-3" /> TS 825 Uygun
-                </span>
-              ) : (
-                <span className="text-[10px] font-semibold text-amber-700 flex items-center gap-0.5">
-                  <ShieldAlert className="w-3 h-3" /> Sınır Üstü
-                </span>
-              )}
-            </div>
-            <div className="font-mono text-sm font-bold text-[#161615] mt-0.5">
-              {assemblySummary.wallUValueWm2K} W/m²K
-            </div>
-            <div className="font-mono text-[10px] text-stone-500">
-              Bölge {city.ts825Zone} Sınırı: ≤ {assemblySummary.ts825WallLimit} W/m²K
-            </div>
-          </div>
-
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-stone-500">Gömülü Karbon (A1–A4)</span>
-              <span className="text-[10px] font-mono font-semibold text-[#15803D]">
-                {assemblySummary.carbonSavedPct > 0
-                  ? `-%${assemblySummary.carbonSavedPct} Karbon`
-                  : 'Standart'}
-              </span>
-            </div>
-            <div className="font-mono text-sm font-bold text-[#161615] mt-0.5">
-              {assemblySummary.embodiedCarbonPerBuiltM2} kgCO₂e/m²
-            </div>
-            <div className="font-mono text-[10px] text-stone-500">
-              Toplam: {assemblySummary.totalProjectCarbonTons} ton (Ref: {assemblySummary.baselineConventionalTons}t)
-            </div>
-          </div>
-
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2">
-            <span className="text-[10px] text-stone-500 block">Termal Faz Kayması</span>
-            <strong className="font-mono text-xs text-[#161615]">
-              {assemblySummary.thermalLagHours} Saat Gecikme
-            </strong>
-          </div>
-
-          <div className="bg-[#F8F7F3] border border-[#E2E0D8] p-2">
-            <span className="text-[10px] text-stone-500 block">Yerel Tedarik (&lt;500 km)</span>
-            <strong className="font-mono text-xs text-[#15803D]">
-              %{assemblySummary.regionalRatioPct} Yerel Kaynak
-            </strong>
-          </div>
+        <div className="bg-[#F8F7F3] border border-stone-200 p-3">
+          <span className="text-stone-500 block mb-1">Karbon Tasarrufu</span>
+          <strong className="text-[#15803D] text-sm">
+            {assemblySummary.carbonSavedPct > 0
+              ? `-%${assemblySummary.carbonSavedPct} Daha Az`
+              : 'Standart'}
+          </strong>
+          <span className="text-[11px] text-stone-500 block mt-1">
+            Klasik betona kıyasla
+          </span>
         </div>
-      </section>
 
-      {/* 04.2 Katman Bazlı Yerel Malzeme, Erişilebilirlik & Sürdürülebilirlik Matrisi */}
-      <section className="space-y-4">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-stone-500 block">
-          04.2 {city.name} İçin Katman Bazlı Malzeme Önerileri
-        </span>
+        <div className="bg-[#F8F7F3] border border-stone-200 p-3">
+          <span className="text-stone-500 block mb-1">Yerel Erişim</span>
+          <strong className="text-[#161615] text-sm">
+            %{assemblySummary.regionalRatioPct} Yakın
+          </strong>
+          <span className="text-[11px] text-stone-500 block mt-1">500 km içinden tedarik</span>
+        </div>
+      </div>
 
-        {CATEGORIES.map((cat) => {
-          const items = evaluatedMaterials.filter((e) => e.material.category === cat);
-          const selectedId = selectedIds[cat];
+      {/* Katman Seçici Sekmeler (Kaydırma Karmaşasını Önler) */}
+      <div className="space-y-3">
+        <label className="block text-xs font-semibold text-stone-800">
+          Binanın Hangi Katmanını İncelemek İstiyorsunuz?
+        </label>
+        <div className="grid grid-cols-3 gap-1.5">
+          {SIMPLE_CATEGORIES.map((cat) => {
+            const isSel = cat.key === activeCat;
+            return (
+              <button
+                key={cat.key}
+                onClick={() => setActiveCat(cat.key)}
+                className={`py-2 px-2 text-xs font-semibold border transition whitespace-nowrap truncate ${
+                  isSel
+                    ? 'bg-[#161615] text-white border-[#161615]'
+                    : 'bg-[#FAF9F6] text-stone-700 border-stone-200 hover:bg-white'
+                }`}
+              >
+                {cat.short}
+              </button>
+            );
+          })}
+        </div>
 
-          return (
-            <div key={cat} className="space-y-1.5 border-b border-[#ECEAE2] pb-3 last:border-b-0">
-              <div className="font-mono text-[11px] font-bold text-[#161615]">
-                {MATERIAL_CATEGORY_LABELS[cat]}
-              </div>
+        <div className="text-xs font-bold text-stone-800 pt-1">{activeCatMeta.full}</div>
 
-              <div className="space-y-1.5">
-                {items.map((ev, idx) => {
-                  const isChosen = ev.material.id === selectedId;
-                  return (
-                    <div
-                      key={ev.material.id}
-                      onClick={() => onSelectMaterial(cat, ev.material.id)}
-                      className={`border p-2.5 cursor-pointer transition ${
-                        isChosen
-                          ? 'border-[#161615] bg-white shadow-sm'
-                          : 'border-[#E2E0D8] bg-[#FAF9F5] hover:bg-white'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2">
-                          <span
-                            className="w-3.5 h-3.5 mt-0.5 shrink-0 border border-stone-400"
-                            style={{ backgroundColor: ev.material.colorHex }}
-                          />
-                          <div>
-                            <div className="font-semibold text-[#161615] leading-snug">
-                              {ev.material.name}
-                              {idx === 0 && (
-                                <span className="ml-1.5 font-mono text-[10px] text-[#C85A17] uppercase">
-                                  [Önerilen]
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-stone-500 mt-0.5 font-mono">
-                              <span className="flex items-center gap-0.5">
-                                <MapPin className="w-3 h-3" /> {ev.material.originCity}
-                              </span>
-                              <span className="flex items-center gap-0.5">
-                                <Truck className="w-3 h-3" /> {ev.distanceKm} km
-                                {ev.isRegionalLeed ? ' (Yerel)' : ''}
-                              </span>
-                              <span>Uygulama: {ev.material.localCraftAvailability}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0 font-mono">
-                          <div className="text-sm font-bold text-[#161615]">{ev.overallScore}</div>
-                          <div className="text-[9px] text-stone-500">Uyum Skoru</div>
-                        </div>
+        {/* Seçili Katmanın Malzeme Kartları */}
+        <div className="space-y-2.5">
+          {visibleMaterials.map((ev, idx) => {
+            const isChosen = ev.material.id === selectedIds[activeCat];
+            return (
+              <div
+                key={ev.material.id}
+                onClick={() => onSelectMaterial(activeCat, ev.material.id)}
+                className={`border p-3.5 cursor-pointer transition ${
+                  isChosen
+                    ? 'border-[#161615] bg-white shadow-xs'
+                    : 'border-stone-200 bg-[#FAF9F6] hover:bg-white'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2.5">
+                    <span
+                      className="w-4 h-4 mt-0.5 shrink-0 border border-stone-400"
+                      style={{ backgroundColor: ev.material.colorHex }}
+                    />
+                    <div>
+                      <div className="font-bold text-[#161615] text-xs leading-snug">
+                        {ev.material.name}
                       </div>
-
-                      <p className="text-[11px] text-stone-600 mt-1.5 leading-snug">
-                        {ev.material.architecturalNote}
-                      </p>
-
-                      {/* Alt Teknik & Sürdürülebilirlik Çubuğu */}
-                      <div className="grid grid-cols-4 gap-1.5 mt-2 pt-1.5 border-t border-[#ECEAE2] font-mono text-[10px]">
-                        <div>
-                          <span className="text-stone-400 block font-sans">İklim</span>
-                          <strong>{ev.climateFitScore}/100</strong>
-                        </div>
-                        <div>
-                          <span className="text-stone-400 block font-sans">Erişim</span>
-                          <strong>{ev.accessibilityScore}/100</strong>
-                        </div>
-                        <div>
-                          <span className="text-stone-400 block font-sans">Karbon/m²</span>
-                          <strong
-                            className={
-                              ev.totalCarbonKgM2 <= 0 ? 'text-[#15803D]' : 'text-[#161615]'
-                            }
-                          >
-                            {ev.totalCarbonKgM2 > 0 ? `+${ev.totalCarbonKgM2}` : ev.totalCarbonKgM2} kg
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-stone-400 block font-sans flex items-center gap-0.5">
-                            <Leaf className="w-2.5 h-2.5 text-[#15803D]" /> Döngüsel
-                          </span>
-                          <strong>%{ev.material.recyclabilityPct}</strong>
-                        </div>
-                      </div>
+                      {idx === 0 && (
+                        <span className="text-[11px] font-semibold text-[#15803D]">
+                          Bu Şehir İçin En Çok Önerilen
+                        </span>
+                      )}
                     </div>
-                  );
-                })}
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <span className="text-sm font-bold text-[#161615]">%{ev.overallScore}</span>
+                    <span className="block text-[10px] text-stone-500">Uyum</span>
+                  </div>
+                </div>
+
+                <p className="text-xs text-stone-600 mt-2 leading-relaxed">
+                  {ev.material.architecturalNote}
+                </p>
+
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2.5 pt-2 border-t border-stone-200 text-[11px] text-stone-600">
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-[#C85A17]" />
+                    Kaynak: <strong>{ev.material.originCity}</strong>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Truck className="w-3.5 h-3.5 text-stone-500" />
+                    Mesafe: <strong>{ev.distanceKm} km</strong>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Leaf className="w-3.5 h-3.5 text-[#15803D]" />
+                    Geri Dönüşüm: <strong>%{ev.material.recyclabilityPct}</strong>
+                  </span>
+                </div>
+
+                <div className="mt-1.5 text-[11px] text-stone-500">
+                  Usta ve malzeme erişimi: <strong className="text-stone-700">{ev.material.localCraftAvailability}</strong>
+                </div>
+
+                {isChosen && (
+                  <div className="mt-2 pt-2 border-t border-stone-100 text-xs font-semibold text-[#161615] flex items-center gap-1.5">
+                    <Check className="w-4 h-4 text-[#15803D]" /> Seçili Malzeme
+                  </div>
+                )}
               </div>
-            </div>
-          );
-        })}
-      </section>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 };

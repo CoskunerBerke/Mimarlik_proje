@@ -1073,144 +1073,114 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full min-h-[480px] bg-[#EAE7DF] border border-[#D8D5CA] overflow-hidden select-none">
+    <div className="relative w-full h-full min-h-[480px] bg-[#EAE7DF] border border-stone-200 overflow-hidden select-none">
       {/* Three.js Canvas */}
       <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
 
-      {/* Sol Üst: Sahne Katman ve Kamera Kontrolleri */}
-      <div className="absolute top-3 left-3 flex flex-wrap items-center gap-1.5 pointer-events-auto">
+      {/* Sol Üst: Sade ve Anlaşılır Görünüm Butonları */}
+      <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 pointer-events-auto">
+        <button
+          onClick={() => setIsPlayingDay((p) => !p)}
+          className={`px-3 py-1.5 text-xs font-semibold border transition flex items-center gap-1.5 whitespace-nowrap shadow-xs ${
+            isPlayingDay
+              ? 'bg-amber-600 text-white border-amber-700'
+              : 'bg-[#161615] text-white border-[#161615] hover:bg-stone-800'
+          }`}
+        >
+          {isPlayingDay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+          {isPlayingDay ? 'Güneşi Durdur' : 'Güneşi Hareket Ettir'}
+        </button>
+
         <button
           onClick={() => setShowSunPath((v) => !v)}
           className={`px-2.5 py-1.5 text-xs font-medium border transition flex items-center gap-1.5 whitespace-nowrap ${
             showSunPath
-              ? 'bg-[#161615] text-white border-[#161615]'
-              : 'bg-white/90 text-[#161615] border-[#D0CDC2] hover:bg-white'
+              ? 'bg-white text-[#161615] border-stone-400 font-semibold'
+              : 'bg-white/75 text-stone-500 border-stone-300 hover:bg-white'
           }`}
         >
           <Sun className="w-3.5 h-3.5 text-amber-500" />
-          Güneş Yörüngesi
+          Güneş Yolu
         </button>
 
         <button
           onClick={() => setShowWindFlow((v) => !v)}
           className={`px-2.5 py-1.5 text-xs font-medium border transition flex items-center gap-1.5 whitespace-nowrap ${
             showWindFlow
-              ? 'bg-[#161615] text-white border-[#161615]'
-              : 'bg-white/90 text-[#161615] border-[#D0CDC2] hover:bg-white'
+              ? 'bg-white text-[#161615] border-stone-400 font-semibold'
+              : 'bg-white/75 text-stone-500 border-stone-300 hover:bg-white'
           }`}
         >
-          <Wind className="w-3.5 h-3.5 text-sky-400" />
-          Rüzgar Akışı ({seasonStats.windLabel})
+          <Wind className="w-3.5 h-3.5 text-sky-600" />
+          Rüzgar ({seasonStats.windLabel})
         </button>
 
         <button
           onClick={() => setColorMode((m) => (m === 'role' ? 'material' : 'role'))}
-          className="px-2.5 py-1.5 text-xs font-medium bg-white/90 text-[#161615] border border-[#D0CDC2] hover:bg-white transition flex items-center gap-1.5 whitespace-nowrap"
+          className="px-2.5 py-1.5 text-xs font-medium bg-white/95 text-[#161615] border border-stone-300 hover:bg-white transition flex items-center gap-1.5 whitespace-nowrap"
         >
           <Layers className="w-3.5 h-3.5" />
-          {colorMode === 'role' ? 'Görünüm: Fonksiyon Zonları' : 'Görünüm: Yerel Malzeme'}
-        </button>
-
-        <button
-          onClick={() => setIsPlayingDay((p) => !p)}
-          className={`px-2.5 py-1.5 text-xs font-medium border transition flex items-center gap-1.5 whitespace-nowrap ${
-            isPlayingDay
-              ? 'bg-amber-600 text-white border-amber-700'
-              : 'bg-white/90 text-[#161615] border-[#D0CDC2] hover:bg-white'
-          }`}
-        >
-          {isPlayingDay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          {isPlayingDay ? 'Gölgeyi Durdur' : 'Gün Boyu Gölge Simülasyonu'}
+          {colorMode === 'role' ? 'Renk: Oda Görevleri' : 'Renk: Dış Malzeme'}
         </button>
       </div>
 
-      {/* Sağ Üst: Kamera Bakış Açıları */}
-      <div className="absolute top-3 right-3 flex items-center bg-white/95 border border-[#D0CDC2] divide-x divide-[#E2E0D8] text-xs">
+      {/* Sağ Üst: Basit Kamera Açıları */}
+      <div className="absolute top-3 right-3 flex items-center bg-white/95 border border-stone-300 divide-x divide-stone-200 text-xs">
         <button
           onClick={() => setCameraPreset('iso')}
           className="px-2.5 py-1.5 hover:bg-stone-100 font-medium flex items-center gap-1 whitespace-nowrap"
-          title="3D İzometrik Perspektif"
         >
-          <Eye className="w-3.5 h-3.5" /> 3D Perspektif
+          <Eye className="w-3.5 h-3.5" /> 3D Açı
         </button>
         <button
           onClick={() => setCameraPreset('top')}
           className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
-          title="Vaziyet Planı ve Gölge İzi"
         >
-          Üst Plan
+          Üstten Bak
         </button>
         <button
           onClick={() => setCameraPreset('south')}
           className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
-          title="Güney Cephesi Bakışı"
         >
           Güney Cephe
         </button>
-        <button
-          onClick={() => setCameraPreset('east')}
-          className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
-          title="Doğu Yan Kesit Bakışı"
-        >
-          Yan Kesit
-        </button>
       </div>
 
-      {/* Sol Alt: Anlık Astronomik ve Mikroklima Telemetri Kutusu */}
-      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-sm border border-[#D0CDC2] px-3.5 py-2.5 text-xs space-y-1 max-w-xs">
-        <div className="flex items-center justify-between gap-4 border-b border-[#E6E4DC] pb-1">
-          <span className="font-semibold text-[#161615] flex items-center gap-1.5">
-            <Compass className="w-3.5 h-3.5 text-[#C85A17]" />
-            {city.name} ({city.lat.toFixed(2)}°K)
+      {/* Sol Alt: Herkesin Anlayacağı Kısa Bilgi Kutusu */}
+      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-xs border border-stone-300 px-3.5 py-2.5 text-xs space-y-1 max-w-sm">
+        <div className="flex items-center gap-2 font-semibold text-[#161615]">
+          <Compass className="w-4 h-4 text-[#C85A17] shrink-0" />
+          <span>
+            {city.name} — Güneş Açısı:{' '}
+            {solarPos.isDaylight ? `${solarPos.altitudeDeg.toFixed(0)}°` : 'Gece'} · Rüzgar:{' '}
+            {seasonStats.windLabel}
           </span>
-          <span className="font-mono text-[11px] text-stone-600">TS 825 B.{city.ts825Zone}</span>
         </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-[11px]">
-          <div className="text-stone-600">
-            Güneş Yükseklik:{' '}
-            <strong className="text-[#161615]">
-              {solarPos.isDaylight ? `${solarPos.altitudeDeg.toFixed(1)}°` : 'Gece'}
-            </strong>
-          </div>
-          <div className="text-stone-600">
-            Azimut: <strong className="text-[#161615]">{solarPos.azimuthDeg.toFixed(0)}°</strong>
-          </div>
-          <div className="text-stone-600">
-            Gölge Çarpanı:{' '}
-            <strong className="text-[#161615]">
-              {solarPos.isDaylight ? `${solarPos.shadowMultiplier.toFixed(2)}xH` : '—'}
-            </strong>
-          </div>
-          <div className="text-stone-600">
-            Rüzgar: <strong className="text-sky-700">{seasonStats.windSpeedMs} m/s</strong>
-          </div>
-        </div>
-        <div className="text-[10px] text-stone-500 pt-0.5">
-          3D kütleye tıklayarak seçebilir, çatı açısını ve boyutunu sağ panelden düzenleyebilirsiniz.
-        </div>
+        <p className="text-[11px] text-stone-600 leading-snug">
+          Fareyle sahneyi çevirebilirsiniz. Çatısını veya boyutunu değiştirmek istediğiniz binanın
+          üzerine doğrudan tıklayın.
+        </p>
       </div>
 
-      {/* Sağ Alt: Fonksiyon Lejantı */}
+      {/* Sağ Alt: Sadeleştirilmiş Renk Anlamları */}
       {colorMode === 'role' && (
-        <div className="hidden sm:flex absolute bottom-3 right-3 bg-white/95 border border-[#D0CDC2] px-3 py-2 text-[11px] flex-col gap-1">
-          <div className="font-semibold text-[10px] uppercase tracking-wider text-stone-500 mb-0.5">
-            Mekan Zonlama Lejantı
+        <div className="hidden md:flex absolute bottom-3 right-3 bg-white/95 border border-stone-300 px-3 py-2 text-xs flex-col gap-1">
+          <div className="font-semibold text-[11px] text-stone-500 mb-0.5">Bina Renkleri</div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 inline-block bg-[#D97736]" />
+            <span>Güney: Güneş Alan Ana Odalar</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 inline-block bg-[#D97736]" />
-            <span>Güney Yaşam / Pasif Solar</span>
+            <span className="w-3 h-3 inline-block bg-[#3B82F6]" />
+            <span>Kuzey: Göz Yormayan Aydınlık Atölye/Ofis</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 inline-block bg-[#3B82F6]" />
-            <span>Kuzey Günışığı / Stüdyo</span>
+            <span className="w-3 h-3 inline-block bg-[#16A34A]" />
+            <span>Merkez: Ortak Alan & Avlu Girişi</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 inline-block bg-[#16A34A]" />
-            <span>Sosyal Avlu / Kış Bahçesi</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 inline-block bg-[#64748B]" />
-            <span>Kuzeybatı Servis / Tampon</span>
+            <span className="w-3 h-3 inline-block bg-[#64748B]" />
+            <span>Batı/Kuzeybatı: Servis & Koridor (Isı Kalkanı)</span>
           </div>
         </div>
       )}
