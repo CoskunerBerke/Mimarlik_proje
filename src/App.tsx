@@ -9,7 +9,7 @@ import {
   SeasonKey,
   SiteParameters,
 } from './types/architecture';
-import { BUILDING_PROGRAMS } from './data/programs';
+import { BUILDING_FUNCTION_GROUPS, BUILDING_PROGRAMS } from './data/programs';
 import {
   calculateSolarPosition,
   getSeasonalSolarSummary,
@@ -35,6 +35,7 @@ import {
   MATERIAL_CATEGORY_LABELS,
 } from './engine/materialEngine';
 import { SiteMapPicker } from './components/SiteMapPicker';
+import { TerrainSoil3DBlock } from './components/TerrainSoil3DBlock';
 import { Viewport3D } from './components/Viewport3D';
 import {
   Box,
@@ -67,16 +68,6 @@ const DEFAULT_SITE: SiteParameters = {
 };
 
 const EMPTY_NEIGHBORS: NeighborContextBlock[] = [];
-
-const FUNCTION_OPTIONS: Array<{ key: BuildingFunctionKey; label: string }> = [
-  { key: 'residential', label: 'Konut / Yaşam Binası' },
-  { key: 'education', label: 'Okul / Eğitim Binası' },
-  { key: 'office', label: 'Ofis / Çalışma Yapısı' },
-  { key: 'cultural', label: 'Kültür Merkezi / Müze / Kütüphane' },
-  { key: 'healthcare', label: 'Sağlık / Klinik Binası' },
-  { key: 'atelier', label: 'Tasarım / Üretim Atölyesi' },
-  { key: 'mixed', label: 'Karma Kullanım (Ticaret + Konut)' },
-];
 
 const QUICK_EXAMPLES = [
   { label: 'Ankara Yenimahalle', query: 'Yenimahalle, Ankara' },
@@ -112,6 +103,7 @@ export const App: React.FC = () => {
     lng: 32.8597,
   });
   const [funcKey, setFuncKey] = useState<BuildingFunctionKey>('education');
+  const [customFuncTitle, setCustomFuncTitle] = useState<string>('');
   const [targetAreaM2, setTargetAreaM2] = useState<number>(3200);
 
   // Canlı Analiz Durumu
@@ -119,8 +111,8 @@ export const App: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [bundle, setBundle] = useState<VerifiedSiteBundle | null>(null);
 
-  // İsteğe Bağlı 3D Simülasyon Durumu
-  const [show3DStudio, setShow3DStudio] = useState(false);
+  // 3D Simülasyon Durumu (Varsayılan açık)
+  const [show3DStudio, setShow3DStudio] = useState(true);
   const [season, setSeason] = useState<SeasonKey>('summer');
   const [solarHour, setSolarHour] = useState<number>(13.0);
   const [activeTypologyKey, setActiveTypologyKey] = useState<MassTypologyKey>('u_court');
@@ -439,21 +431,35 @@ export const App: React.FC = () => {
 
           {/* Bina Fonksiyonu ve Metrekare */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-            <div>
+            <div className="space-y-2">
               <label className="block text-xs font-bold uppercase tracking-wider text-stone-600 mb-1.5">
-                Yapılacak Binanın Fonksiyonu
+                Yapılacak Binanın Fonksiyonu (20+ Yapı Türü veya Özel Giriş)
               </label>
               <select
                 value={funcKey}
                 onChange={(e) => setFuncKey(e.target.value as BuildingFunctionKey)}
                 className="w-full bg-[#FAF9F6] border border-stone-300 px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:border-[#181816]"
               >
-                {FUNCTION_OPTIONS.map((f) => (
-                  <option key={f.key} value={f.key}>
-                    {f.label}
-                  </option>
+                {BUILDING_FUNCTION_GROUPS.map((grp) => (
+                  <optgroup key={grp.category} label={grp.category}>
+                    {grp.items.map((f) => (
+                      <option key={f.key} value={f.key}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
+
+              {funcKey === 'custom' && (
+                <input
+                  type="text"
+                  value={customFuncTitle}
+                  onChange={(e) => setCustomFuncTitle(e.target.value)}
+                  placeholder="Proje konunuzu yazın (Örn: Arkeopark Ziyaretçi Merkezi, İtfaiye Binası, Gözlemevi)..."
+                  className="w-full bg-white border border-stone-400 px-3.5 py-2 text-sm focus:outline-none focus:border-[#181816]"
+                />
+              )}
             </div>
 
             <div>
@@ -519,6 +525,7 @@ export const App: React.FC = () => {
           <ReportSections
             bundle={bundle}
             funcKey={funcKey}
+            customFuncTitle={customFuncTitle}
             targetAreaM2={targetAreaM2}
             recommendations={recommendations}
             activeTypologyKey={activeTypologyKey}
@@ -558,6 +565,7 @@ export const App: React.FC = () => {
 interface ReportSectionsProps {
   bundle: VerifiedSiteBundle;
   funcKey: BuildingFunctionKey;
+  customFuncTitle: string;
   targetAreaM2: number;
   recommendations: ReturnType<typeof generateTypologyRecommendations>;
   activeTypologyKey: MassTypologyKey;
@@ -582,6 +590,7 @@ interface ReportSectionsProps {
 const ReportSections: React.FC<ReportSectionsProps> = ({
   bundle,
   funcKey,
+  customFuncTitle,
   targetAreaM2,
   recommendations,
   activeTypologyKey,
@@ -607,6 +616,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   const sm = bundle.soilAndMass;
   const ce = bundle.climateEvidence;
   const prog = BUILDING_PROGRAMS[funcKey];
+  const displayProgTitle =
+    funcKey === 'custom' && customFuncTitle.trim() ? customFuncTitle.trim() : prog.title;
 
   // Parselde güncel saha/plankote veya sondajlı zemin etüdü varsa üzerine yazma (override) desteği
   const [showFieldOverride, setShowFieldOverride] = useState(false);
@@ -706,22 +717,24 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             yerleştirilmelidir.
           </p>
           <p>
-            <strong>2. Arazi Eğimi ve Bina Ağırlığı (Kütle):</strong> Arsa{' '}
-            <strong>%{tp.slopePct} eğime</strong> ({tp.landformType}) ve{' '}
+            <strong>2. Arazi Düz mü Eğimli mi & Bina Ağırlığı:</strong> Uydu kot analizine göre bu
+            nokta <strong>{tp.flatnessVerdict}</strong> karakterindedir ve{' '}
             <strong>{sm.soilTypeTitle}</strong> zemin yapısına sahiptir. Deprem ve zemin güvenliği
             için binanın m² ağırlığı klasik ağır binalardaki ~1.280 kg/m² yerine{' '}
             <strong>
-              {sm.recommendedUnitMassKgM2.min}–{sm.recommendedUnitMassKgM2.max} kg/m²
+              {effectiveMassCalc.recommendedUnitMassKgM2.min}–
+              {effectiveMassCalc.recommendedUnitMassKgM2.max} kg/m²
             </strong>{' '}
             aralığında ({targetAreaM2.toLocaleString('tr-TR')} m² için toplam{' '}
             <strong>
               {minBuildingTons.toLocaleString('tr-TR')}–{maxBuildingTons.toLocaleString('tr-TR')} ton
             </strong>
-            ) tutulmalı ve <strong>{sm.recommendedFoundation}</strong> uygulanmalıdır.
+            ) tutulmalı ve <strong>{effectiveMassCalc.recommendedFoundation}</strong> uygulanmalıdır.
           </p>
           <p>
-            <strong>3. Kütle, Avlu ve Çatı:</strong> {prog.title} için en uygun yerleşim{' '}
-            <strong>{activeRec.name}</strong> ({activeRec.courtyardAreaM2} m² avlu) ve çatıda{' '}
+            <strong>3. Kütle, Avlu ve Çatı:</strong> <strong>{displayProgTitle}</strong> için en
+            uygun yerleşim <strong>{activeRec.name}</strong> ({activeRec.courtyardAreaM2} m² avlu)
+            ve çatıda{' '}
             <strong>
               {optRoof.roofPitchDeg}° eğimli {ROOF_TYPES_META[optRoof.roofType].shortName}
             </strong>{' '}
@@ -883,12 +896,21 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             BÖLÜM 02 · TOPOĞRAFYA, TOPRAK YAPISI VE BİNA AĞIRLIĞI
           </span>
           <h3 className="text-lg font-bold text-[#181816] mt-0.5">
-            Arazi Eğimi ve Toprak Yapısına Göre Nasıl ve Kaç Kilo Kütleli Bina Yapılmalı?
+            Arazi Düz mü, Eğimli mi? Toprak Yapısına Göre Nasıl Bina Yapılmalı?
           </h3>
           <p className="text-xs text-stone-500 mt-1">
             Kaynaklar: {tp.sourceName} · {sm.sources.slice(0, 3).join(' · ')}
           </p>
         </div>
+
+        {/* Gerçek 3D Arazi Eğimi ve Yeraltı Toprak Katmanı Kesit Modeli */}
+        <TerrainSoil3DBlock
+          topography={tp}
+          effectiveSlopePct={effectiveSlopePct}
+          soilClass={effectiveSoilClass}
+          soilTitle={sm.soilTypeTitle}
+          minFrostDepthCm={sm.minFrostDepthCm}
+        />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs sm:text-sm">
           {/* Topoğrafya Kutusu */}
@@ -1075,8 +1097,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             BÖLÜM 03 · KÜTLE, AVLU VE MEKAN DAĞILIMI
           </span>
           <h3 className="text-lg font-bold text-[#181816] mt-0.5">
-            {prog.title} ({targetAreaM2.toLocaleString('tr-TR')} m²) İçin En Uygun Kütle ve Avlu
-            Yerleşimi
+            {displayProgTitle} ({targetAreaM2.toLocaleString('tr-TR')} m²) İçin En Uygun Kütle ve
+            Avlu Yerleşimi
           </h3>
         </div>
 
@@ -1294,8 +1316,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-8 h-[430px]">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+              <div className="lg:col-span-8">
                 <Viewport3D
                   city={city}
                   season={season}
@@ -1314,6 +1336,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                   activeMaterialWallColor={activeWallColor}
                   activeMaterialRoofColor={activeRoofColor}
                   exportTrigger={exportTrigger}
+                  terrainGrid3x3M={tp.grid3x3M}
+                  nativeSlopePct={tp.slopePct}
+                  effectiveSlopePct={effectiveSlopePct}
+                  soilClass={effectiveSoilClass}
                 />
               </div>
 

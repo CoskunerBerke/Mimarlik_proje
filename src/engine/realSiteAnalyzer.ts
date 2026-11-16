@@ -14,6 +14,10 @@ export interface WindDirectionBin {
 
 export interface TopographyAnalysis {
   elevationM: number;
+  // 3x3 uydu kot matrisi (~90m aralıkla): [KB, K, KD, B, Merkez, D, GB, G, GD]
+  grid3x3M: [number, number, number, number, number, number, number, number, number];
+  isFlatTerrain: boolean;
+  flatnessVerdict: string;
   neighbors100m: {
     northM: number;
     southM: number;
@@ -565,8 +569,21 @@ export async function fetchVerifiedSiteBundle(
     );
   }
 
+  const isFlatTerrain = slopePct < 2.5;
+  const flatnessVerdict =
+    slopePct < 2.5
+      ? `DÜZ ARAZİ (%${slopePct} Eğim — Düz Zemine Oturan Kurgu)`
+      : slopePct < 6.0
+      ? `EĞİMLİ ARAZİ (%${slopePct} Hafif Eğim — Subasman / Yarım Kat Kademeli Kurgu)`
+      : slopePct < 12.0
+      ? `EĞİMLİ YAMAÇ (%${slopePct} Orta Eğim — Kademeli Teraslama ve İstinat Gerekli)`
+      : `DİK YAMAÇ (%${slopePct} Yüksek Eğim — Yamaca Gömülü Kademeli Kütle Zorunlu)`;
+
   const topography: TopographyAnalysis = {
     elevationM: zCenter,
+    grid3x3M: [zNW, zNorth, zNE, zWest, zCenter, zEast, zSW, zSouth, zSE],
+    isFlatTerrain,
+    flatnessVerdict,
     neighbors100m: {
       northM: zNorth,
       southM: zSouth,

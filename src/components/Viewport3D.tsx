@@ -15,6 +15,11 @@ import {
   generateSunPathArc,
   SolarPosition,
 } from '../engine/solarEngine';
+import {
+  build3DTerrainCutawayGroup,
+  sampleTerrainDeltaY,
+  TerrainSamplerConfig,
+} from '../engine/terrainMeshHelper';
 import { Compass, Eye, Layers, Play, Pause, Sun, Wind } from 'lucide-react';
 
 interface Viewport3DProps {
@@ -33,6 +38,10 @@ interface Viewport3DProps {
   activeMaterialWallColor: string;
   activeMaterialRoofColor: string;
   exportTrigger: number;
+  terrainGrid3x3M?: [number, number, number, number, number, number, number, number, number];
+  nativeSlopePct?: number;
+  effectiveSlopePct?: number;
+  soilClass?: 'ZB' | 'ZC' | 'ZD' | 'ZE';
 }
 
 const ROLE_COLORS: Record<SpaceZoneRole, string> = {
@@ -424,6 +433,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   activeMaterialWallColor,
   activeMaterialRoofColor,
   exportTrigger,
+  terrainGrid3x3M,
+  nativeSlopePct = 0,
+  effectiveSlopePct = 0,
+  soilClass = 'ZC',
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -513,23 +526,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     scene.add(sunLight);
     scene.add(sunLight.target);
     sunLightRef.current = sunLight;
-
-    // Geniş çevre zemin plağı
-    const groundGeo = new THREE.PlaneGeometry(420, 420);
-    const groundMat = new THREE.MeshStandardMaterial({
-      color: 0xe3dfd5,
-      roughness: 0.95,
-      metalness: 0.0,
-    });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.05;
-    ground.receiveShadow = true;
-    scene.add(ground);
-
-    const grid = new THREE.GridHelper(240, 48, 0xc4bfb2, 0xd5d1c5);
-    grid.position.y = -0.02;
-    scene.add(grid);
 
     const massRoot = new THREE.Group();
     scene.add(massRoot);
@@ -629,25 +625,48 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
     selectableMeshesRef.current = [];
 
-    // A) Arsa Parsel Zemini
-    const parcelGeo = new THREE.BoxGeometry(site.parcelWidthM, 0.16, site.parcelDepthM);
-    const parcelMat = new THREE.MeshStandardMaterial({
-      color: 0xf4f2eb,
-      roughness: 0.9,
-    });
-    const parcelMesh = new THREE.Mesh(parcelGeo, parcelMat);
-    parcelMesh.position.y = 0.06;
-    parcelMesh.receiveShadow = true;
-    massRoot.add(parcelMesh);
-
-    // Parsel sınırı ve Çekme mesafesi çizgisi
-    const borderPts = [
-      new THREE.Vector3(-site.parcelWidthM / 2, 0.18, -site.parcelDepthM / 2),
-      new THREE.Vector3(site.parcelWidthM / 2, 0.18, -site.parcelDepthM / 2),
-      new THREE.Vector3(site.parcelWidthM / 2, 0.18, site.parcelDepthM / 2),
-      new THREE.Vector3(-site.parcelWidthM / 2, 0.18, site.parcelDepthM / 2),
-      new THREE.Vector3(-site.parcelWidthM / 2, 0.18, -site.parcelDepthM / 2),
+    // A) Gerçek 3D Uydu Topoğrafyası, Eşyükselti Konturları ve Yeraltı Toprak Kesiti Bloğu
+    const defaultGrid: [number, number, number, number, number, number, number, number, number] = [
+      0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
+    const terrainCfg: TerrainSamplerConfig = {
+      grid3x3M: terrainGrid3x3M ?? defaultGrid,
+      nativeSlopePct,
+      effectiveSlopePct,
+      exaggeration: 1.0,
+    };
+
+    const terrainGroup = build3DTerrainCutawayGroup(180, 40, terrainCfg, soilClass);
+    massRoot.add(terrainGroup);
+
+    // Arazi eğimine tam oturan Parsel Sınırı ve Çekme Mesafesi Çizgileri
+    const sampleRectOnTerrain = (rw: number, rd: number, yLift: number): THREE.Vector3[] => {
+      const pts: THREE.Vector3[] = [];
+      const steps = 16;
+      for (let i = 0; i <= steps; i++) {
+        const x = -rw / 2 + (i / steps) * rw;
+        const z = -rd / 2;
+        pts.push(new THREE.Vector3(x, sampleTerrainDeltaY(x, z, terrainCfg) + yLift, z));
+      }
+      for (let i = 0; i <= steps; i++) {
+        const x = rw / 2;
+        const z = -rd / 2 + (i / steps) * rd;
+        pts.push(new THREE.Vector3(x, sampleTerrainDeltaY(x, z, terrainCfg) + yLift, z));
+      }
+      for (let i = 0; i <= steps; i++) {
+        const x = rw / 2 - (i / steps) * rw;
+        const z = rd / 2;
+        pts.push(new THREE.Vector3(x, sampleTerrainDeltaY(x, z, terrainCfg) + yLift, z));
+      }
+      for (let i = 0; i <= steps; i++) {
+        const x = -rw / 2;
+        const z = rd / 2 - (i / steps) * rd;
+        pts.push(new THREE.Vector3(x, sampleTerrainDeltaY(x, z, terrainCfg) + yLift, z));
+      }
+      return pts;
+    };
+
+    const borderPts = sampleRectOnTerrain(site.parcelWidthM, site.parcelDepthM, 0.25);
     const borderLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(borderPts),
       new THREE.LineBasicMaterial({ color: 0x161615 })
@@ -656,53 +675,89 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     const sbW = Math.max(6, site.parcelWidthM - site.setbackM * 2);
     const sbD = Math.max(6, site.parcelDepthM - site.setbackM * 2);
-    const sbPts = [
-      new THREE.Vector3(-sbW / 2, 0.19, -sbD / 2),
-      new THREE.Vector3(sbW / 2, 0.19, -sbD / 2),
-      new THREE.Vector3(sbW / 2, 0.19, sbD / 2),
-      new THREE.Vector3(-sbW / 2, 0.19, sbD / 2),
-      new THREE.Vector3(-sbW / 2, 0.19, -sbD / 2),
-    ];
+    const sbPts = sampleRectOnTerrain(sbW, sbD, 0.28);
     const sbGeo = new THREE.BufferGeometry().setFromPoints(sbPts);
     const sbLine = new THREE.Line(
       sbGeo,
-      new THREE.LineDashedMaterial({ color: 0x9ca3af, dashSize: 1.5, gapSize: 1.0 })
+      new THREE.LineDashedMaterial({ color: 0x78716c, dashSize: 1.5, gapSize: 1.0 })
     );
     sbLine.computeLineDistances();
     massRoot.add(sbLine);
 
-    // B) Bina Kütle Grubu (Global Oryantasyon Döndürmeli)
+    // B) Bina Kütle Grubu (Global Oryantasyon Döndürmeli + Eğimli Zemine Subasman/İstinat Oturtmalı)
+    const orientRad = (-globalOrientationDeg * Math.PI) / 180;
+    const cosO = Math.cos(orientRad);
+    const sinO = Math.sin(orientRad);
+    const toWorldXZ = (lx: number, lz: number) => ({
+      wx: lx * cosO + lz * sinO,
+      wz: -lx * sinO + lz * cosO,
+    });
+
     const orientedBuildingGroup = new THREE.Group();
-    orientedBuildingGroup.rotation.y = (-globalOrientationDeg * Math.PI) / 180;
+    orientedBuildingGroup.rotation.y = orientRad;
     massRoot.add(orientedBuildingGroup);
 
-    // Avlu mikroiklim su & peyzaj öğesi (merkez boşlukta)
+    // Avlu mikroiklim su & peyzaj öğesi (merkez arazi kotunda)
     if (courtyardAreaM2 >= 60) {
+      const centerTerrY = sampleTerrainDeltaY(0, 0, terrainCfg);
       const cSize = Math.min(20, Math.sqrt(courtyardAreaM2) * 0.65);
-      const lawnGeo = new THREE.BoxGeometry(cSize, 0.12, cSize * 0.82);
+      const lawnGeo = new THREE.BoxGeometry(cSize, 0.9, cSize * 0.82);
       const lawnMat = new THREE.MeshStandardMaterial({ color: 0x84a96b, roughness: 0.92 });
       const lawn = new THREE.Mesh(lawnGeo, lawnMat);
-      lawn.position.set(0, 0.18, 0);
+      lawn.position.set(0, centerTerrY + 0.05, 0);
       lawn.receiveShadow = true;
       orientedBuildingGroup.add(lawn);
 
-      // Buharlaşmalı serinletme havuzu (özellikle sıcak iklimlerde)
-      const poolGeo = new THREE.BoxGeometry(cSize * 0.42, 0.16, cSize * 0.34);
+      const poolGeo = new THREE.BoxGeometry(cSize * 0.42, 0.18, cSize * 0.34);
       const poolMat = new THREE.MeshStandardMaterial({
         color: 0x38bdf8,
         roughness: 0.18,
         metalness: 0.25,
       });
       const pool = new THREE.Mesh(poolGeo, poolMat);
-      pool.position.set(0, 0.22, 0);
+      pool.position.set(0, centerTerrY + 0.52, 0);
       orientedBuildingGroup.add(pool);
     }
 
-    // Her bir 3D Kütle Bloğu ve Parametrik Çatısı
+    // Her bir 3D Kütle Bloğu, Eğim Subasmanı/İstinat Perdesi ve Parametrik Çatısı
     for (const b of blocks) {
+      // Bloğun 4 köşesindeki gerçek arazi yüksekliğini örnekle -> havada kalmasın, yamaca otursun!
+      const halfW = b.width / 2;
+      const halfD = b.depth / 2;
+      const cornerOffsets = [
+        [-halfW, -halfD],
+        [halfW, -halfD],
+        [halfW, halfD],
+        [-halfW, halfD],
+      ];
+      let minCornerY = Infinity;
+      let maxCornerY = -Infinity;
+      for (const [ox, oz] of cornerOffsets) {
+        const { wx, wz } = toWorldXZ(b.x + ox, b.z + oz);
+        const ty = sampleTerrainDeltaY(wx, wz, terrainCfg);
+        if (ty < minCornerY) minCornerY = ty;
+        if (ty > maxCornerY) maxCornerY = ty;
+      }
+
+      const groundFloorY = maxCornerY + 0.2;
+      const plinthBottomY = minCornerY - 1.8;
+      const plinthH = Math.max(0.5, groundFloorY - plinthBottomY);
+
       const blockGroup = new THREE.Group();
-      blockGroup.position.set(b.x, 0.14, b.z);
+      blockGroup.position.set(b.x, groundFloorY, b.z);
       blockGroup.rotation.y = (-b.rotationDeg * Math.PI) / 180;
+
+      // Eğimli araziye gömülen betonarme/taş subasman & istinat bazası
+      const plinthGeo = new THREE.BoxGeometry(b.width + 0.3, plinthH, b.depth + 0.3);
+      const plinthMat = new THREE.MeshStandardMaterial({
+        color: 0x8c877e,
+        roughness: 0.9,
+      });
+      const plinthMesh = new THREE.Mesh(plinthGeo, plinthMat);
+      plinthMesh.position.y = -plinthH / 2;
+      plinthMesh.castShadow = true;
+      plinthMesh.receiveShadow = true;
+      blockGroup.add(plinthMesh);
 
       const totalH = b.floors * b.floorHeight;
       const isSelected = b.id === selectedBlockId;
@@ -841,7 +896,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         nx = -(site.parcelWidthM / 2 + nb.distanceM + nb.widthM / 2);
       }
 
-      m.position.set(nx, nb.heightM / 2, nz);
+      const nbTerrY = sampleTerrainDeltaY(nx, nz, terrainCfg);
+      m.position.set(nx, nbTerrY + nb.heightM / 2, nz);
       massRoot.add(m);
       const e = new THREE.LineSegments(new THREE.EdgesGeometry(g), neighborEdge);
       e.position.copy(m.position);
@@ -857,6 +913,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     colorMode,
     activeMaterialWallColor,
     activeMaterialRoofColor,
+    terrainGrid3x3M,
+    nativeSlopePct,
+    effectiveSlopePct,
+    soilClass,
   ]);
 
   // 3. Güneş Yörüngesi Kubbesi, Anlık Güneş Işığı Gölgesi ve Mevsimsel Rüzgar Akışı
@@ -1072,118 +1132,133 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     ctrl.update();
   };
 
+  const isFlatSite = effectiveSlopePct < 2.5;
+
   return (
-    <div className="relative w-full h-full min-h-[480px] bg-[#EAE7DF] border border-stone-200 overflow-hidden select-none">
-      {/* Three.js Canvas */}
-      <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+    <div className="w-full flex flex-col bg-white border border-stone-300 overflow-hidden select-none">
+      {/* Üst Kontrol Çubuğu (3D Tuvalin Üstünde — Asla Üst Üste Binmez) */}
+      <div className="px-3 py-2 bg-[#FAF9F6] border-b border-stone-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setIsPlayingDay((p) => !p)}
+            className={`px-2.5 py-1 font-semibold border transition flex items-center gap-1 whitespace-nowrap ${
+              isPlayingDay
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-[#161615] text-white border-[#161615] hover:bg-stone-800'
+            }`}
+          >
+            {isPlayingDay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+            {isPlayingDay ? 'Durdur' : 'Güneşi Oynat'}
+          </button>
 
-      {/* Sol Üst: Sade ve Anlaşılır Görünüm Butonları */}
-      <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 pointer-events-auto">
-        <button
-          onClick={() => setIsPlayingDay((p) => !p)}
-          className={`px-3 py-1.5 text-xs font-semibold border transition flex items-center gap-1.5 whitespace-nowrap shadow-xs ${
-            isPlayingDay
-              ? 'bg-amber-600 text-white border-amber-700'
-              : 'bg-[#161615] text-white border-[#161615] hover:bg-stone-800'
-          }`}
-        >
-          {isPlayingDay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          {isPlayingDay ? 'Güneşi Durdur' : 'Güneşi Hareket Ettir'}
-        </button>
+          <button
+            type="button"
+            onClick={() => setShowSunPath((v) => !v)}
+            className={`px-2.5 py-1 font-medium border transition flex items-center gap-1 whitespace-nowrap ${
+              showSunPath
+                ? 'bg-white text-[#161615] border-stone-400 font-semibold'
+                : 'bg-stone-100 text-stone-500 border-stone-300'
+            }`}
+          >
+            <Sun className="w-3.5 h-3.5 text-amber-500" />
+            Güneş Yolu
+          </button>
 
-        <button
-          onClick={() => setShowSunPath((v) => !v)}
-          className={`px-2.5 py-1.5 text-xs font-medium border transition flex items-center gap-1.5 whitespace-nowrap ${
-            showSunPath
-              ? 'bg-white text-[#161615] border-stone-400 font-semibold'
-              : 'bg-white/75 text-stone-500 border-stone-300 hover:bg-white'
-          }`}
-        >
-          <Sun className="w-3.5 h-3.5 text-amber-500" />
-          Güneş Yolu
-        </button>
+          <button
+            type="button"
+            onClick={() => setShowWindFlow((v) => !v)}
+            className={`px-2.5 py-1 font-medium border transition flex items-center gap-1 whitespace-nowrap ${
+              showWindFlow
+                ? 'bg-white text-[#161615] border-stone-400 font-semibold'
+                : 'bg-stone-100 text-stone-500 border-stone-300'
+            }`}
+          >
+            <Wind className="w-3.5 h-3.5 text-sky-600" />
+            Rüzgar
+          </button>
 
-        <button
-          onClick={() => setShowWindFlow((v) => !v)}
-          className={`px-2.5 py-1.5 text-xs font-medium border transition flex items-center gap-1.5 whitespace-nowrap ${
-            showWindFlow
-              ? 'bg-white text-[#161615] border-stone-400 font-semibold'
-              : 'bg-white/75 text-stone-500 border-stone-300 hover:bg-white'
-          }`}
-        >
-          <Wind className="w-3.5 h-3.5 text-sky-600" />
-          Rüzgar ({seasonStats.windLabel})
-        </button>
+          <button
+            type="button"
+            onClick={() => setColorMode((m) => (m === 'role' ? 'material' : 'role'))}
+            className="px-2.5 py-1 font-medium bg-white text-[#161615] border border-stone-300 hover:bg-stone-50 transition flex items-center gap-1 whitespace-nowrap"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            {colorMode === 'role' ? 'Renk: Oda Görevleri' : 'Renk: Dış Malzeme'}
+          </button>
+        </div>
 
-        <button
-          onClick={() => setColorMode((m) => (m === 'role' ? 'material' : 'role'))}
-          className="px-2.5 py-1.5 text-xs font-medium bg-white/95 text-[#161615] border border-stone-300 hover:bg-white transition flex items-center gap-1.5 whitespace-nowrap"
-        >
-          <Layers className="w-3.5 h-3.5" />
-          {colorMode === 'role' ? 'Renk: Oda Görevleri' : 'Renk: Dış Malzeme'}
-        </button>
+        <div className="flex items-center bg-white border border-stone-300 divide-x divide-stone-200">
+          <button
+            type="button"
+            onClick={() => setCameraPreset('iso')}
+            className="px-2.5 py-1 hover:bg-stone-100 font-medium flex items-center gap-1 whitespace-nowrap"
+          >
+            <Eye className="w-3.5 h-3.5" /> 3D Açı
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraPreset('top')}
+            className="px-2.5 py-1 hover:bg-stone-100 font-medium whitespace-nowrap"
+          >
+            Üst Plan
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraPreset('south')}
+            className="px-2.5 py-1 hover:bg-stone-100 font-medium whitespace-nowrap"
+          >
+            Güney Cephe
+          </button>
+        </div>
       </div>
 
-      {/* Sağ Üst: Basit Kamera Açıları */}
-      <div className="absolute top-3 right-3 flex items-center bg-white/95 border border-stone-300 divide-x divide-stone-200 text-xs">
-        <button
-          onClick={() => setCameraPreset('iso')}
-          className="px-2.5 py-1.5 hover:bg-stone-100 font-medium flex items-center gap-1 whitespace-nowrap"
-        >
-          <Eye className="w-3.5 h-3.5" /> 3D Açı
-        </button>
-        <button
-          onClick={() => setCameraPreset('top')}
-          className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
-        >
-          Üstten Bak
-        </button>
-        <button
-          onClick={() => setCameraPreset('south')}
-          className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
-        >
-          Güney Cephe
-        </button>
-      </div>
+      {/* Three.js 3D Tuval (Gerçek Eğimli Zemin + Yeraltı Kesiti + Bina Kütleleri) */}
+      <div
+        ref={containerRef}
+        className="w-full h-[380px] sm:h-[420px] cursor-grab active:cursor-grabbing bg-[#EAE7DF]"
+      />
 
-      {/* Sol Alt: Herkesin Anlayacağı Kısa Bilgi Kutusu */}
-      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-xs border border-stone-300 px-3.5 py-2.5 text-xs space-y-1 max-w-sm">
-        <div className="flex items-center gap-2 font-semibold text-[#161615]">
-          <Compass className="w-4 h-4 text-[#C85A17] shrink-0" />
-          <span>
-            {city.name} — Güneş Açısı:{' '}
-            {solarPos.isDaylight ? `${solarPos.altitudeDeg.toFixed(0)}°` : 'Gece'} · Rüzgar:{' '}
-            {seasonStats.windLabel}
+      {/* Alt Bilgi ve Renk Anlamları Çubuğu (Tuvalin Altında — Sıfır Çakışma) */}
+      <div className="px-3.5 py-2.5 bg-[#FAF9F6] border-t border-stone-200 space-y-2 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-semibold text-[#161615]">
+            <Compass className="w-4 h-4 text-[#C85A17] shrink-0" />
+            <span>
+              {city.name} ·{' '}
+              <strong className={isFlatSite ? 'text-[#15803D]' : 'text-[#C85A17]'}>
+                {isFlatSite
+                  ? `Düz Arazi (%${effectiveSlopePct} Eğim)`
+                  : `Eğimli Arazi (%${effectiveSlopePct} Eğim — Subasman Kademeli)`}
+              </strong>{' '}
+              · Güneş: {solarPos.isDaylight ? `${solarPos.altitudeDeg.toFixed(0)}°` : 'Gece'}
+            </span>
+          </div>
+          <span className="text-[11px] text-stone-500">
+            Çatısını değiştirmek istediğiniz 3D bloğun üzerine tıklayın
           </span>
         </div>
-        <p className="text-[11px] text-stone-600 leading-snug">
-          Fareyle sahneyi çevirebilirsiniz. Çatısını veya boyutunu değiştirmek istediğiniz binanın
-          üzerine doğrudan tıklayın.
-        </p>
-      </div>
 
-      {/* Sağ Alt: Sadeleştirilmiş Renk Anlamları */}
-      {colorMode === 'role' && (
-        <div className="hidden md:flex absolute bottom-3 right-3 bg-white/95 border border-stone-300 px-3 py-2 text-xs flex-col gap-1">
-          <div className="font-semibold text-[11px] text-stone-500 mb-0.5">Bina Renkleri</div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 inline-block bg-[#D97736]" />
-            <span>Güney: Güneş Alan Ana Odalar</span>
+        {colorMode === 'role' && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-stone-700 pt-1 border-t border-stone-200">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 inline-block bg-[#D97736]" /> Güney: Güneş Alan Odalar
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 inline-block bg-[#3B82F6]" /> Kuzey: Aydınlık Atölye/Ofis
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 inline-block bg-[#16A34A]" /> Merkez: Ortak Alan & Avlu
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 inline-block bg-[#64748B]" /> Batı/KB: Servis & Koridor
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 inline-block bg-[#8C877E]" /> Gri Baza: Eğim Subasmanı / İstinat
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 inline-block bg-[#3B82F6]" />
-            <span>Kuzey: Göz Yormayan Aydınlık Atölye/Ofis</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 inline-block bg-[#16A34A]" />
-            <span>Merkez: Ortak Alan & Avlu Girişi</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 inline-block bg-[#64748B]" />
-            <span>Batı/Kuzeybatı: Servis & Koridor (Isı Kalkanı)</span>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

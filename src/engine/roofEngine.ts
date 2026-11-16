@@ -114,10 +114,13 @@ export function recommendOptimalRoofForBlock(
     Math.max(0.6, Math.min(2.2, windowHeightRef / Math.tan(summerNoon * DEG2RAD) + 0.35)).toFixed(2)
   );
 
-  // 1. Kuzey homojen günışığı gerektiren stüdyo/sergi/üretim kütleleri
+  // 1. Kuzey homojen günışığı gerektiren stüdyo/sergi/üretim/spor/kütüphane kütleleri
   if (
     block.role === 'north_daylight' ||
     funcKey === 'atelier' ||
+    funcKey === 'industrial' ||
+    funcKey === 'sports' ||
+    funcKey === 'library' ||
     (funcKey === 'cultural' && block.role !== 'service_buffer')
   ) {
     const count = Math.max(2, Math.min(6, Math.round(block.depth / 4.2)));

@@ -42,12 +42,25 @@ export interface CityClimateProfile {
 
 export type BuildingFunctionKey =
   | 'residential'
+  | 'villa'
+  | 'dormitory'
+  | 'hotel'
+  | 'kindergarten'
   | 'education'
-  | 'office'
+  | 'library'
   | 'cultural'
+  | 'office'
+  | 'commercial'
   | 'healthcare'
+  | 'sports'
+  | 'religious'
+  | 'transport'
+  | 'public_gov'
+  | 'atelier'
+  | 'industrial'
+  | 'agro'
   | 'mixed'
-  | 'atelier';
+  | 'custom';
 
 export type SpaceZoneRole =
   | 'primary_living'
