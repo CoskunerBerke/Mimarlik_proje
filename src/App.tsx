@@ -16,6 +16,7 @@ import {
   SEASON_REPRESENTATIVE_DOY,
 } from './engine/solarEngine';
 import {
+  computeSoilMassRecommendation,
   fetchVerifiedSiteBundle,
   resolveLocationInput,
   reverseGeocodeCoordinates,
@@ -607,6 +608,31 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   const ce = bundle.climateEvidence;
   const prog = BUILDING_PROGRAMS[funcKey];
 
+  // Parselde güncel saha/plankote veya sondajlı zemin etüdü varsa üzerine yazma (override) desteği
+  const [showFieldOverride, setShowFieldOverride] = useState(false);
+  const [overrideSoilClass, setOverrideSoilClass] = useState<'AUTO' | 'ZB' | 'ZC' | 'ZD' | 'ZE'>(
+    'AUTO'
+  );
+  const [overrideSlopePct, setOverrideSlopePct] = useState<string>('');
+
+  const effectiveSoilClass =
+    overrideSoilClass === 'AUTO' ? sm.estimatedTbdyClass : overrideSoilClass;
+  const effectiveSlopePct =
+    overrideSlopePct.trim() !== '' && !Number.isNaN(Number(overrideSlopePct))
+      ? Math.max(0, Number(overrideSlopePct))
+      : tp.slopePct;
+
+  const effectiveMassCalc = useMemo(
+    () =>
+      computeSoilMassRecommendation(
+        effectiveSoilClass,
+        sm.seismicHazardLevel,
+        sm.seismicCount100km,
+        sm.maxHistoricalMag
+      ),
+    [effectiveSoilClass, sm.seismicHazardLevel, sm.seismicCount100km, sm.maxHistoricalMag]
+  );
+
   const activeRec =
     recommendations.find((r) => r.key === activeTypologyKey) || recommendations[0];
   const currentBlocks = blocks.length > 0 ? blocks : activeRec.blocks;
@@ -625,8 +651,12 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   const optRoof = recommendOptimalRoofForBlock(activeBlock, city, funcKey);
   const roofPerf = analyzeBlockRoofPerformance(activeBlock, city);
 
-  const minBuildingTons = Math.round((sm.recommendedUnitMassKgM2.min * targetAreaM2) / 1000);
-  const maxBuildingTons = Math.round((sm.recommendedUnitMassKgM2.max * targetAreaM2) / 1000);
+  const minBuildingTons = Math.round(
+    (effectiveMassCalc.recommendedUnitMassKgM2.min * targetAreaM2) / 1000
+  );
+  const maxBuildingTons = Math.round(
+    (effectiveMassCalc.recommendedUnitMassKgM2.max * targetAreaM2) / 1000
+  );
   const heavyBuildingTons = Math.round((sm.conventionalConcreteMassKgM2 * targetAreaM2) / 1000);
 
   const activeWallColor =
@@ -712,9 +742,33 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             Rüzgar Nereden Esiyor? Güneş ve Mevsimler Nasıl?
           </h3>
           <p className="text-xs text-stone-500 mt-1">
-            Kaynak: {ce.sourceName} — {ce.periodLabel} ({ce.daysAnalyzed} günlük gerçek ölçüm)
+            Kaynak: {ce.sourceName} — {ce.periodLabel} ({ce.daysAnalyzed} günlük güncel ölçüm)
           </p>
         </div>
+
+        {/* Şu Anki Anlık Canlı Hava, Rüzgar ve Toprak Nemi Durumu */}
+        {ce.liveNow && (
+          <div className="bg-[#FAF9F5] border border-stone-300 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div>
+              <span className="font-bold text-[#15803D] uppercase tracking-wider mr-2">
+                ● Canlı Saha Gözlemi ({ce.liveNow.observedAt}):
+              </span>
+              <span>
+                Şu an Rüzgar: <strong>{ce.liveNow.windDirectionName}</strong> (
+                {ce.liveNow.windSpeedMs} m/s) · Hava: <strong>{ce.liveNow.tempC}°C</strong> (Nem %
+                {ce.liveNow.humidityPct})
+              </span>
+            </div>
+            {ce.liveNow.soilMoistureSurfaceM3M3 != null && (
+              <div className="text-stone-600 font-mono">
+                Canlı Toprak Nemi: <strong>{ce.liveNow.soilMoistureSurfaceM3M3.toFixed(3)} m³/m³</strong>
+                {ce.liveNow.soilTempSurfaceC != null
+                  ? ` · Toprak Sıcaklığı: ${ce.liveNow.soilTempSurfaceC}°C`
+                  : ''}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Gerçek 8 Yönlü Yıllık Rüzgar Dağılımı */}
         <div className="space-y-3">
@@ -846,8 +900,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                 {tp.neighbors100m.eastM}m, Batı: {tp.neighbors100m.westM}m)
               </div>
               <div>
-                <strong>Hesaplanan Eğim:</strong> %{tp.slopePct} ({tp.slopeDeg}°) —{' '}
-                <strong>{tp.landformType}</strong>
+                <strong>Hesaplanan Eğim:</strong> %{effectiveSlopePct} (Uydu: %{tp.slopePct},{' '}
+                {tp.slopeDeg}°) — <strong>{tp.landformType}</strong>
               </div>
               <div>
                 <strong>Yamaç Yönü (Bakı):</strong> {tp.aspectLabel}
@@ -862,18 +916,18 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           <div className="bg-[#FAF9F6] border border-stone-200 p-4 space-y-2.5">
             <div className="font-bold text-[#181816] flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#181816]" />
-              Bölgesel Toprak / Jeoloji ve Deprem Kaydı
+              Bölgesel Toprak / Jeoloji ve Güncel Deprem Kaydı
             </div>
             <div className="text-xs space-y-1 text-stone-700">
               <div>
                 <strong>Jeolojik Birim:</strong> {sm.geologicAgeTr} ({sm.geologicUnitRaw})
               </div>
               <div>
-                <strong>Zemin Karakteri:</strong> {sm.soilTypeTitle} (Tahmini TBDY 2018:{' '}
-                <strong>{sm.estimatedTbdyClass}</strong>)
+                <strong>Zemin Karakteri:</strong> {sm.soilTypeTitle} (Aktif Sınıf:{' '}
+                <strong>TBDY 2018 {effectiveSoilClass}</strong>)
               </div>
               <div>
-                <strong>100 km Çevrede Gerçek Deprem (1970–2025):</strong> M≥4.5 büyüklüğünde{' '}
+                <strong>100 km Çevrede Gerçek Deprem (Güncel Katalog):</strong> M≥4.5 büyüklüğünde{' '}
                 <strong>{sm.seismicCount100km} deprem</strong> (En büyük:{' '}
                 <strong>M {sm.maxHistoricalMag || '<4.5'}</strong> — {sm.seismicHazardLevel})
               </div>
@@ -882,6 +936,66 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
               {sm.soilDescription}
             </p>
           </div>
+        </div>
+
+        {/* İsteğe Bağlı: Parsel Sondaj Raporu / Halihazır Plankote Manuel Güncelleme */}
+        <div className="border border-stone-200 bg-white">
+          <button
+            type="button"
+            onClick={() => setShowFieldOverride(!showFieldOverride)}
+            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-700 hover:bg-stone-50 flex items-center justify-between"
+          >
+            <span>
+              Elinizde parselin güncel Zemin Etüdü Raporu veya Belediye Plankote Eğimi var mı?
+              (Saha Verisiyle Güncelle)
+            </span>
+            {showFieldOverride ? (
+              <ChevronUp className="w-4 h-4 shrink-0" />
+            ) : (
+              <ChevronDown className="w-4 h-4 shrink-0" />
+            )}
+          </button>
+
+          {showFieldOverride && (
+            <div className="p-4 border-t border-stone-200 bg-[#FAF9F6] grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div>
+                <label className="block font-semibold text-stone-700 mb-1">
+                  Sondajlı Zemin Etüdü Sınıfı (TBDY 2018)
+                </label>
+                <select
+                  value={overrideSoilClass}
+                  onChange={(e) =>
+                    setOverrideSoilClass(e.target.value as 'AUTO' | 'ZB' | 'ZC' | 'ZD' | 'ZE')
+                  }
+                  className="w-full bg-white border border-stone-300 px-3 py-2 font-semibold"
+                >
+                  <option value="AUTO">
+                    Otomatik Uydu/Jeoloji Tahmini ({sm.estimatedTbdyClass})
+                  </option>
+                  <option value="ZB">ZB — Az Ayrışmış Sağlam Kaya</option>
+                  <option value="ZC">ZC — Çok Sıkı Kum/Çakıl veya Yumuşak Kaya</option>
+                  <option value="ZD">ZD — Orta Sıkı Kum/Kil Tabakası</option>
+                  <option value="ZE">ZE — Gevşek Kum / Yumuşak Alüvyon Kil</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-stone-700 mb-1">
+                  Plankote Arazi Eğimi (% Olarak — Boşsa Uydu Verisi: %{tp.slopePct})
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={60}
+                  step={0.5}
+                  value={overrideSlopePct}
+                  onChange={(e) => setOverrideSlopePct(e.target.value)}
+                  placeholder={`Uydu ölçümü: %${tp.slopePct}`}
+                  className="w-full bg-white border border-stone-300 px-3 py-2"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Bina Kütlesi (kg/m² ve Toplam Ton) ve Temel Önerisi */}
@@ -893,7 +1007,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             <div>
               <span className="text-stone-500 block">Önerilen Birim Bina Kütlesi</span>
               <strong className="text-base text-[#15803D]">
-                {sm.recommendedUnitMassKgM2.min} – {sm.recommendedUnitMassKgM2.max} kg/m²
+                {effectiveMassCalc.recommendedUnitMassKgM2.min} –{' '}
+                {effectiveMassCalc.recommendedUnitMassKgM2.max} kg/m²
               </strong>
               <span className="text-stone-500 block mt-0.5">
                 (Klasik ağır betonarme: ~{sm.conventionalConcreteMassKgM2} kg/m²)
@@ -914,16 +1029,16 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             <div>
               <span className="text-stone-500 block">Önerilen Temel Tipi</span>
               <strong className="text-xs text-[#181816] block mt-0.5 leading-snug">
-                {sm.recommendedFoundation}
+                {effectiveMassCalc.recommendedFoundation}
               </strong>
             </div>
           </div>
 
           <div className="text-xs text-stone-700 space-y-1.5 leading-relaxed">
             <div>
-              <strong>Önerilen Taşıyıcı Sistem:</strong> {sm.recommendedStructure}
+              <strong>Önerilen Taşıyıcı Sistem:</strong> {effectiveMassCalc.recommendedStructure}
             </div>
-            {sm.buildingSoilRules.map((rule, idx) => (
+            {effectiveMassCalc.buildingSoilRules.map((rule, idx) => (
               <div key={idx}>• {rule}</div>
             ))}
           </div>
@@ -1344,19 +1459,19 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
         </p>
         <ul className="space-y-1.5">
           <li>
-            1. <strong>Meteoroloji ve Rüzgar Yönü Serisi:</strong> ECMWF ERA5 Küresel Yeniden Analiz
-            Veri Seti (2020–2024, 1.827 gün) —{' '}
+            1. <strong>Meteoroloji ve Rüzgar Yönü Serisi:</strong> ECMWF ERA5 Sürekli Güncellenen
+            Yeniden Analiz Veri Seti ({ce.periodLabel}, {ce.daysAnalyzed} gün) —{' '}
             <a
               href={`https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat.toFixed(
                 4
-              )}&longitude=${city.lng.toFixed(
-                4
-              )}&start_date=2024-01-01&end_date=2024-12-31&daily=temperature_2m_mean,wind_direction_10m_dominant,wind_speed_10m_mean`}
+              )}&longitude=${city.lng.toFixed(4)}&start_date=${ce.startDateIso}&end_date=${
+                ce.endDateIso
+              }&daily=temperature_2m_mean,wind_direction_10m_dominant,wind_speed_10m_mean`}
               target="_blank"
               rel="noreferrer"
               className="text-[#C85A17] underline inline-flex items-center gap-0.5"
             >
-              Ham ERA5 Verisini Görüntüle <ExternalLink className="w-3 h-3" />
+              Ham ERA5 Güncel Verisini Görüntüle <ExternalLink className="w-3 h-3" />
             </a>
           </li>
           <li>

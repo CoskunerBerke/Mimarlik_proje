@@ -46,8 +46,21 @@ export interface SoilAndMassAnalysis {
   sources: string[];
 }
 
+export interface LiveNowSnapshot {
+  observedAt: string;
+  tempC: number;
+  humidityPct: number;
+  windSpeedMs: number;
+  windDirectionDeg: number;
+  windDirectionName: string;
+  soilMoistureSurfaceM3M3: number | null;
+  soilTempSurfaceC: number | null;
+}
+
 export interface DetailedWindAndClimateEvidence {
   periodLabel: string;
+  startDateIso: string;
+  endDateIso: string;
   daysAnalyzed: number;
   recordMinTempC: number;
   recordMaxTempC: number;
@@ -57,6 +70,7 @@ export interface DetailedWindAndClimateEvidence {
   maxWindGustKmh: number;
   annualWindRose: WindDirectionBin[];
   seasonalWindTop: Record<SeasonKey, WindDirectionBin[]>;
+  liveNow: LiveNowSnapshot | null;
   sourceName: string;
 }
 
@@ -253,12 +267,74 @@ function computeWindHistogram(angles: number[]): WindDirectionBin[] {
   })).sort((a, b) => b.frequencyPct - a.frequencyPct);
 }
 
+export function computeSoilMassRecommendation(
+  estimatedTbdyClass: 'ZB' | 'ZC' | 'ZD' | 'ZE',
+  seismicHazardLevel: SoilAndMassAnalysis['seismicHazardLevel'],
+  seismicCount100km: number,
+  maxHistoricalMag: number
+): Pick<
+  SoilAndMassAnalysis,
+  | 'recommendedUnitMassKgM2'
+  | 'recommendedFoundation'
+  | 'recommendedStructure'
+  | 'buildingSoilRules'
+> {
+  let recMinKg = 850;
+  let recMaxKg = 1150;
+  let massLabel = 'Orta Ağırlıkta Dengeli Kütle';
+  let recFoundation = 'Kirişli veya Mantar Radye Temel + Çevre Drenajı';
+  let recStructure = 'Perde-Çerçeveli Betonarme (Bims/Gazbeton Hafif Dolgulu) veya Kompozit Sistem';
+
+  if (
+    estimatedTbdyClass === 'ZE' ||
+    (estimatedTbdyClass === 'ZD' && seismicHazardLevel === 'Yüksek Sismik Tehlike')
+  ) {
+    recMinKg = 420;
+    recMaxKg = 780;
+    massLabel = 'Hafifletilmiş Yapı Kütlesi (Deprem ve Zemin Yükü Azaltımlı)';
+    recFoundation =
+      'Kalın Radye Jeneral Temel + Rijit Bodrum Çevre Perdeleri (Gerekirse Zemin İyileştirme / Kazık)';
+    recStructure =
+      'Çapraz Lamine Ahşap (CLT), Yapısal Çelik İskelet veya Hafif Gazbeton/Perde Betonarme Karma Sistem';
+  } else if (estimatedTbdyClass === 'ZD') {
+    recMinKg = 650;
+    recMaxKg = 980;
+    massLabel = 'Orta-Hafif Kontrollü Yapı Kütlesi';
+    recFoundation = 'Radye Temel (Bütünleşik Plak Temel) ve Su Yalıtımlı Subasman/Bodrum';
+    recStructure = 'Perde Duvar Destekli Betonarme (Pomza/Bims Hafif Duvarlı) veya Hibrit Çelik/Ahşap';
+  } else if (estimatedTbdyClass === 'ZB') {
+    recMinKg = 900;
+    recMaxKg = 1350;
+    massLabel = 'Yüksek Isıl Kütleli Sağlam Yapı Kabuğu Uygulanabilir';
+    recFoundation = 'Sürekli (Mütemadi) Temel veya İnce Radye Temel';
+    recStructure =
+      seismicHazardLevel === 'Yüksek Sismik Tehlike'
+        ? 'Sünek Perde-Çerçeveli Betonarme + Doğal Taş Kaplama'
+        : 'Betonarme, Doğal Taş Kagir Kompozit veya Sıkıştırılmış Toprak Isıl Kütle';
+  }
+
+  const buildingSoilRules: string[] = [
+    `Deprem kuvveti binanın toplam ağırlığıyla doğru orantılıdır (F = m × a). Bu zeminde (${estimatedTbdyClass}) m² başına bina ağırlığının klasik ağır binalardaki 1.250–1.400 kg/m² yerine ${recMinKg}–${recMaxKg} kg/m² aralığında tutulması deprem yükünü %30–50 azaltır.`,
+    `100 km çevrede büyüklüğü M≥4.5 olan ${seismicCount100km} gerçek deprem (En büyük: M ${
+      maxHistoricalMag || '4.4 altı'
+    }) kaydedilmiştir; planda burulma yaratan düzensiz çıkmalardan kaçınılmalı, simetrik/kompakt taşıyıcı aks seçilmelidir.`,
+    `Not: Bölgesel jeoloji verisi ön tasarım rehberidir; kesin uygulama için parselde güncel sondajlı zemin etüdü (TBDY 2018) verisi esas alınır.`,
+  ];
+
+  return {
+    recommendedUnitMassKgM2: { min: recMinKg, max: recMaxKg, label: massLabel },
+    recommendedFoundation: recFoundation,
+    recommendedStructure: recStructure,
+    buildingSoilRules,
+  };
+}
+
 /**
- * Seçilen nokta için 4 ayrı bilimsel veri kaynağından canlı ve kanıta dayalı arazi raporu üretir:
- * 1) Copernicus DEM GLO-90 Uydu Topoğrafyası (5 noktalı gerçek eğim ve bakı)
- * 2) ECMWF ERA5 5 Yıllık (2020-2024, 1827 gün) Saatlik/Günlük Yeniden Analiz İklim Serisi
- * 3) Macrostrat Jeolojik Harita Servisi (Kayaç / Çökel / Zemin Karakteri)
- * 4) USGS Sismik Deprem Kataloğu (100 km yarıçapta 1970-2025 gerçek M>=4.5 depremler)
+ * Seçilen nokta için bilimsel veri kaynaklarından dinamik tarih pencereli (güncel) arazi raporu üretir:
+ * 1) Open-Meteo Canlı Tahmin & Toprak Nemi Servisi (Anlık 15 dk rüzgar, sıcaklık ve zemin nemi)
+ * 2) Copernicus DEM GLO-90 Uydu Topoğrafyası (5 noktalı gerçek eğim ve bakı)
+ * 3) ECMWF ERA5 Kayan 5 Yıllık Pencere (Bugün - 7 günden geriye son 5 tam yıl, ~1826 gün)
+ * 4) Macrostrat Jeolojik Harita Servisi + USGS Güncel Sismik Deprem Kataloğu
  */
 export async function fetchVerifiedSiteBundle(
   lat: number,
@@ -266,6 +342,55 @@ export async function fetchVerifiedSiteBundle(
   shortTitle: string,
   displayAddress: string
 ): Promise<VerifiedSiteBundle> {
+  // Önce anlık canlı gözlem + sunucu güncel tarihini al (sabit yıl kullanılmaz, her zaman güncel kalır!)
+  const liveForecastUrl =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
+    `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m` +
+    `&hourly=soil_moisture_0_to_7cm,soil_temperature_0cm&forecast_days=1&timezone=auto`;
+
+  let serverNow = new Date();
+  let liveNow: LiveNowSnapshot | null = null;
+
+  try {
+    const fcRes = await fetch(liveForecastUrl);
+    if (fcRes.ok) {
+      const fcData = await fcRes.json();
+      if (fcData.current?.time) {
+        const parsed = new Date(fcData.current.time);
+        if (!Number.isNaN(parsed.getTime())) {
+          serverNow = parsed;
+        }
+        const wdDeg = Number(fcData.current.wind_direction_10m ?? 0);
+        const sectorIdx = Math.round((((wdDeg % 360) + 360) % 360) / 45) % 8;
+        liveNow = {
+          observedAt: String(fcData.current.time).replace('T', ' '),
+          tempC: Number(fcData.current.temperature_2m ?? 15),
+          humidityPct: Number(fcData.current.relative_humidity_2m ?? 60),
+          windSpeedMs: Number(((fcData.current.wind_speed_10m ?? 10) / 3.6).toFixed(1)),
+          windDirectionDeg: wdDeg,
+          windDirectionName: WIND_SECTORS[sectorIdx].name,
+          soilMoistureSurfaceM3M3:
+            fcData.hourly?.soil_moisture_0_to_7cm?.[0] != null
+              ? Number(fcData.hourly.soil_moisture_0_to_7cm[0])
+              : null,
+          soilTempSurfaceC:
+            fcData.hourly?.soil_temperature_0cm?.[0] != null
+              ? Number(fcData.hourly.soil_temperature_0cm[0])
+              : null,
+        };
+      }
+    }
+  } catch {
+    // Sunucu saatine erişilemezse cihaz tarihini kullan
+  }
+
+  // ERA5 arşivi 5-7 gün gecikmeyle sürekli güncellenir -> Bugün - 7 gün dinamik bitiş tarihi!
+  const endD = new Date(serverNow.getTime() - 7 * 86400000);
+  const startD = new Date(endD.getTime() - 5 * 365 * 86400000);
+  const startDateIso = startD.toISOString().slice(0, 10);
+  const endDateIso = endD.toISOString().slice(0, 10);
+  const currentYear = endD.getUTCFullYear();
+
   // ~100 metre kuzey-güney ve doğu-batı ofsetleri
   const dLat100 = 0.0009;
   const dLng100 = 0.0009 / Math.max(0.25, Math.cos((lat * Math.PI) / 180));
@@ -278,7 +403,7 @@ export async function fetchVerifiedSiteBundle(
 
   const eraUrl =
     `https://archive-api.open-meteo.com/v1/archive?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
-    `&start_date=2020-01-01&end_date=2024-12-31` +
+    `&start_date=${startDateIso}&end_date=${endDateIso}` +
     `&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean,precipitation_sum,snowfall_sum,wind_speed_10m_mean,wind_gusts_10m_max,wind_direction_10m_dominant,shortwave_radiation_sum` +
     `&timezone=auto`;
 
@@ -607,7 +732,9 @@ export async function fetchVerifiedSiteBundle(
   };
 
   const climateEvidence: DetailedWindAndClimateEvidence = {
-    periodLabel: '2020 – 2024 (5 Tam Yıl)',
+    periodLabel: `${startDateIso} – ${endDateIso} (Güncel Kayan 5 Yıl)`,
+    startDateIso,
+    endDateIso,
     daysAnalyzed: times.length,
     recordMinTempC: Number(recordMinTempC.toFixed(1)),
     recordMaxTempC: Number(recordMaxTempC.toFixed(1)),
@@ -617,7 +744,8 @@ export async function fetchVerifiedSiteBundle(
     maxWindGustKmh: Math.round(maxWindGustKmh),
     annualWindRose,
     seasonalWindTop,
-    sourceName: 'ECMWF ERA5 Küresel Yeniden Analiz Veri Seti (Open-Meteo Archive API)',
+    liveNow,
+    sourceName: 'ECMWF ERA5 Sürekli Güncellenen Küresel Yeniden Analiz & IFS Canlı Serisi',
   };
 
   // =========================================================================
@@ -711,47 +839,12 @@ export async function fetchVerifiedSiteBundle(
     }
   }
 
-  // Zemin Sınıfı + Deprem Tehlikesine Göre Önerilen Birim Bina Kütlesi (kg/m²)
-  // Not: TBDY 2018 uyarınca kat kesme kuvveti V_t = m_toplam * S_a(T) olduğundan
-  // zayıf zeminde ve yüksek sismik bölgede hafif kütle (450-800 kg/m²) hayati avantaj sağlar!
-  let recMinKg = 850;
-  let recMaxKg = 1150;
-  let massLabel = 'Orta Ağırlıkta Dengeli Kütle';
-  let recFoundation = 'Kirişli veya Mantar Radye Temel + Çevre Drenajı';
-  let recStructure = 'Perde-Çerçeveli Betonarme (Bims/Gazbeton Hafif Dolgulu) veya Kompozit Sistem';
-
-  if (estimatedTbdyClass === 'ZE' || (estimatedTbdyClass === 'ZD' && seismicHazardLevel === 'Yüksek Sismik Tehlike')) {
-    recMinKg = 420;
-    recMaxKg = 780;
-    massLabel = 'Hafifletilmiş Yapı Kütlesi (Deprem ve Zemin Yükü Azaltımlı)';
-    recFoundation =
-      'Kalın Radye Jeneral Temel + Rijit Bodrum Çevre Perdeleri (Gerekirse Zemin İyileştirme / Kazık)';
-    recStructure =
-      'Çapraz Lamine Ahşap (CLT), Yapısal Çelik İskelet veya Hafif Gazbeton/Perde Betonarme Karma Sistem';
-  } else if (estimatedTbdyClass === 'ZD') {
-    recMinKg = 650;
-    recMaxKg = 980;
-    massLabel = 'Orta-Hafif Kontrollü Yapı Kütlesi';
-    recFoundation = 'Radye Temel (Bütünleşik Plak Temel) ve Su Yalıtımlı Subasman/Bodrum';
-    recStructure = 'Perde Duvar Destekli Betonarme (Pomza/Bims Hafif Duvarlı) veya Hibrit Çelik/Ahşap';
-  } else if (estimatedTbdyClass === 'ZB') {
-    recMinKg = 900;
-    recMaxKg = 1350;
-    massLabel = 'Yüksek Isıl Kütleli Sağlam Yapı Kabuğu Uygulanabilir';
-    recFoundation = 'Sürekli (Mütemadi) Temel veya İnce Radye Temel';
-    recStructure =
-      seismicHazardLevel === 'Yüksek Sismik Tehlike'
-        ? 'Sünek Perde-Çerçeveli Betonarme + Doğal Taş Kaplama'
-        : 'Betonarme, Doğal Taş Kagir Kompozit veya Sıkıştırılmış Toprak Isıl Kütle';
-  }
-
-  const buildingSoilRules: string[] = [
-    `Deprem kuvveti binanın toplam ağırlığıyla doğru orantılıdır (F = m × a). Bu zeminde (${estimatedTbdyClass}) m² başına bina ağırlığının klasik ağır binalardaki 1.250–1.400 kg/m² yerine ${recMinKg}–${recMaxKg} kg/m² aralığında tutulması deprem yükünü %30–50 azaltır.`,
-    `Son 55 yılda 100 km çevrede büyüklüğü M≥4.5 olan ${seismicCount100km} deprem (En büyük: M ${
-      maxHistoricalMag || '4.4 altı'
-    }) kaydedilmiştir; planda burulma yaratan düzensiz çıkmalardan kaçınılmalı, simetrik/kompakt taşıyıcı aks seçilmelidir.`,
-    `Not: Bölgesel jeoloji verisi ön tasarım rehberidir; kesin temel boyutu için parselde sondajlı zemin etüdü (TBDY 2018) zorunludur.`,
-  ];
+  const massRec = computeSoilMassRecommendation(
+    estimatedTbdyClass,
+    seismicHazardLevel,
+    seismicCount100km,
+    maxHistoricalMag
+  );
 
   const soilAndMass: SoilAndMassAnalysis = {
     geologicUnitRaw: `${rawName}${rawAge ? ` (${rawAge})` : ''}`,
@@ -762,14 +855,14 @@ export async function fetchVerifiedSiteBundle(
     seismicCount100km,
     maxHistoricalMag,
     seismicHazardLevel,
-    recommendedUnitMassKgM2: { min: recMinKg, max: recMaxKg, label: massLabel },
+    recommendedUnitMassKgM2: massRec.recommendedUnitMassKgM2,
     conventionalConcreteMassKgM2: 1280,
-    recommendedFoundation: recFoundation,
-    recommendedStructure: recStructure,
-    buildingSoilRules,
+    recommendedFoundation: massRec.recommendedFoundation,
+    recommendedStructure: massRec.recommendedStructure,
+    buildingSoilRules: massRec.buildingSoilRules,
     sources: [
       'Macrostrat Küresel Jeoloji Haritası API (MTA 1/500.000 Jeoloji Uyumlu)',
-      'USGS Earthquake Hazards Program Sismik Kataloğu (1970–2025)',
+      `USGS Earthquake Hazards Program Güncel Sismik Kataloğu (1970–${currentYear})`,
       'TBDY 2018 (Türkiye Bina Deprem Yönetmeliği) & TS EN 1991-1-1 Kütle İlkeleri',
     ],
   };
