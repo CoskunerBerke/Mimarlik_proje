@@ -45,7 +45,8 @@ export function haversineRoadDistanceKm(
 
 export function evaluateMaterialsForProject(
   city: CityClimateProfile,
-  funcKey: BuildingFunctionKey
+  funcKey: BuildingFunctionKey,
+  preferLightweight = false
 ): EvaluatedMaterial[] {
   return MATERIALS_DB.map((mat) => {
     const distanceKm = haversineRoadDistanceKm(city.lat, city.lng, mat.originLat, mat.originLng);
@@ -57,12 +58,17 @@ export function evaluateMaterialsForProject(
 
     const thermalResistanceR = Number((mat.defaultThicknessM / Math.max(0.02, mat.lambdaWmK)).toFixed(2));
 
-    // 1. İklim Uyumu Skoru
+    // 1. İklim ve Zemin Uyumu Skoru
     let climateFitScore = mat.suitableClimates.includes(city.climateType) ? 88 : 58;
     if (city.ts825Zone >= 4 && mat.frostResistance === 'yüksek') climateFitScore += 8;
     if (city.ts825Zone >= 4 && mat.frostResistance !== 'yüksek') climateFitScore -= 16;
     if (city.seasons.summer.humidityPct >= 65 && mat.vaporPermeability === 'yüksek') climateFitScore += 7;
-    if (city.climateType === 'hot_arid' && mat.densityKgM3 >= 1800) climateFitScore += 8;
+    if (city.climateType === 'hot_arid' && mat.densityKgM3 >= 1800 && !preferLightweight) climateFitScore += 8;
+    // Yumuşak zemin / deprem bölgesinde hafif malzeme avantajı
+    if (preferLightweight) {
+      if (massPerM2 <= 220) climateFitScore += 9;
+      else if (massPerM2 >= 550) climateFitScore -= 14;
+    }
     climateFitScore = Math.max(35, Math.min(99, climateFitScore));
 
     // 2. Erişilebilirlik & Yerel Tedarik Skoru
