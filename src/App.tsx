@@ -859,12 +859,16 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             </span>
           </div>
           <div>
-            <span className="text-stone-500 block">5 Yıllık Uç Değerler & Güneş</span>
+            <span className="text-stone-500 block">Uç Değerler, Güneş & Çatı Rüzgar Yükü</span>
             <strong className="text-sm text-[#181816] block mt-0.5">
               {ce.recordMinTempC}°C / +{ce.recordMaxTempC}°C
             </strong>
             <span className="text-stone-600 block mt-1">
-              Yıllık Güneş: <strong>{ce.annualSolarKwhM2} kWh/m²</strong> · Kar: {ce.annualSnowCm} cm
+              Güneş: <strong>{ce.annualSolarKwhM2} kWh/m²</strong>
+              {ce.nasaSolarKwhM2 ? ` (NASA Teyit: ${ce.nasaSolarKwhM2})` : ''}
+              {ce.roofWindPressureKnM2 != null
+                ? ` · Çatı Rüzgar Basıncı: ${ce.roofWindPressureKnM2} kN/m²`
+                : ''}
             </span>
           </div>
         </div>
@@ -882,7 +886,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             Arazi Eğimi ve Toprak Yapısına Göre Nasıl ve Kaç Kilo Kütleli Bina Yapılmalı?
           </h3>
           <p className="text-xs text-stone-500 mt-1">
-            Kaynaklar: {tp.sourceName} · {sm.sources[0]} · {sm.sources[1]}
+            Kaynaklar: {tp.sourceName} · {sm.sources.slice(0, 3).join(' · ')}
           </p>
         </div>
 
@@ -891,20 +895,24 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           <div className="bg-[#FAF9F6] border border-stone-200 p-4 space-y-2.5">
             <div className="font-bold text-[#181816] flex items-center gap-2">
               <Mountain className="w-4 h-4 text-[#C85A17]" />
-              Uydu Topoğrafya ve Eğim Ölçümü
+              13 Noktalı Uydu Topoğrafya, Eğim ve Drenaj Konumu
             </div>
             <div className="text-xs space-y-1 text-stone-700">
               <div>
-                <strong>Merkez Rakım:</strong> {tp.elevationM} m (100m çevrede Kuzey:{' '}
-                {tp.neighbors100m.northM}m, Güney: {tp.neighbors100m.southM}m, Doğu:{' '}
-                {tp.neighbors100m.eastM}m, Batı: {tp.neighbors100m.westM}m)
+                <strong>Merkez Rakım:</strong> {tp.elevationM} m (90m çevrede K:{' '}
+                {tp.neighbors100m.northM}m, G: {tp.neighbors100m.southM}m, D:{' '}
+                {tp.neighbors100m.eastM}m, B: {tp.neighbors100m.westM}m)
               </div>
               <div>
-                <strong>Hesaplanan Eğim:</strong> %{effectiveSlopePct} (Uydu: %{tp.slopePct},{' '}
-                {tp.slopeDeg}°) — <strong>{tp.landformType}</strong>
+                <strong>Hesaplanan Eğim (Horn 3x3 CBS):</strong> %{effectiveSlopePct} (Uydu: %
+                {tp.slopePct}, {tp.slopeDeg}°) — <strong>{tp.landformType}</strong>
               </div>
               <div>
                 <strong>Yamaç Yönü (Bakı):</strong> {tp.aspectLabel}
+              </div>
+              <div>
+                <strong>Su Drenaj Konumu (TPI {tp.tpiM > 0 ? `+${tp.tpiM}` : tp.tpiM}m):</strong>{' '}
+                {tp.drainagePositionLabel}
               </div>
             </div>
             <p className="text-xs text-stone-600 pt-1 border-t border-stone-200 leading-relaxed">
@@ -916,7 +924,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           <div className="bg-[#FAF9F6] border border-stone-200 p-4 space-y-2.5">
             <div className="font-bold text-[#181816] flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#181816]" />
-              Bölgesel Toprak / Jeoloji ve Güncel Deprem Kaydı
+              Toprak / Derin Temel Nemi, Don Derinliği ve Sismik Kayıt
             </div>
             <div className="text-xs space-y-1 text-stone-700">
               <div>
@@ -927,9 +935,22 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                 <strong>TBDY 2018 {effectiveSoilClass}</strong>)
               </div>
               <div>
-                <strong>100 km Çevrede Gerçek Deprem (Güncel Katalog):</strong> M≥4.5 büyüklüğünde{' '}
+                <strong>120 km Çevrede Gerçek Deprem & Yer İvmesi:</strong> M≥4.5 olan{' '}
                 <strong>{sm.seismicCount100km} deprem</strong> (En büyük:{' '}
-                <strong>M {sm.maxHistoricalMag || '<4.5'}</strong> — {sm.seismicHazardLevel})
+                <strong>M {sm.maxHistoricalMag || '<4.5'}</strong>
+                {sm.nearestQuakeKm != null ? `, En yakın: ${sm.nearestQuakeKm} km` : ''} · Tahmini
+                Kaya İvmesi: <strong>~{sm.estimatedPgaG}g</strong>)
+              </div>
+              <div>
+                <strong>Temel Kotu (1.0–2.5m) Zemin & Don Verisi:</strong> Min. Don Derinliği{' '}
+                <strong>{sm.minFrostDepthCm} cm</strong>
+                {sm.annualFrostDays != null ? ` (${sm.annualFrostDays} donlu gün/yıl)` : ''}
+                {sm.deepFoundationMoistureM3M3 != null
+                  ? ` · Temel Nemi: ${sm.deepFoundationMoistureM3M3} m³/m³`
+                  : ''}
+                {sm.nasaRootWetnessPct != null
+                  ? ` · NASA Zemin Doygunluğu: %${sm.nasaRootWetnessPct}`
+                  : ''}
               </div>
             </div>
             <p className="text-xs text-stone-600 pt-1 border-t border-stone-200 leading-relaxed">
@@ -1503,13 +1524,12 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             </a>
           </li>
           <li>
-            4. <strong>Bölgesel Deprem Kayıtları ve Bina Kütlesi İlkeleri:</strong> USGS Earthquake
-            Hazards Program Kataloğu (1970–2025, 100 km yarıçap) & AFAD TBDY 2018 (Türkiye Bina
-            Deprem Yönetmeliği) —{' '}
+            4. <strong>Bölgesel Deprem Kayıtları ve Yer İvmesi (PGA):</strong> USGS Earthquake
+            Hazards Program Güncel Kataloğu (120 km yarıçap) & AFAD TBDY 2018 Kütle İlkeleri —{' '}
             <a
               href={`https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=${city.lat.toFixed(
                 4
-              )}&longitude=${city.lng.toFixed(4)}&maxradiuskm=100&minmagnitude=4.5&starttime=1970-01-01`}
+              )}&longitude=${city.lng.toFixed(4)}&maxradiuskm=120&minmagnitude=4.5&starttime=1970-01-01`}
               target="_blank"
               rel="noreferrer"
               className="text-[#C85A17] underline inline-flex items-center gap-0.5"
@@ -1518,9 +1538,23 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             </a>
           </li>
           <li>
-            5. <strong>Isı Yalıtımı, Güneş Açı ve Malzeme Standartları:</strong> TS 825 Binalarda Isı
-            Yalıtım Kuralları Standardı, NOAA Güneş Konumu Denklemleri ve ICE v3 Yapı Malzemeleri
-            Yaşam Döngüsü Karbon Veritabanı.
+            5. <strong>NASA Uydu Bina Klimatolojisi, Zemin Doygunluğu ve Don Günü:</strong> NASA
+            Langley Research Center POWER Sustainable Buildings (community=SB) —{' '}
+            <a
+              href={`https://power.larc.nasa.gov/api/temporal/climatology/point?parameters=ALLSKY_SFC_SW_DWN,WS50M,GWETPROF,FROST_DAYS&community=SB&longitude=${city.lng.toFixed(
+                4
+              )}&latitude=${city.lat.toFixed(4)}&format=JSON`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[#C85A17] underline inline-flex items-center gap-0.5"
+            >
+              Ham NASA POWER Verisini Aç <ExternalLink className="w-3 h-3" />
+            </a>
+          </li>
+          <li>
+            6. <strong>Isı Yalıtımı ve Malzeme Karbon Standartları:</strong> TS 825 Binalarda Isı
+            Yalıtım Kuralları Standardı, NOAA Güneş Denklemleri ve ICE v3 Yapı Malzemeleri LCA
+            Veritabanı.
           </li>
         </ul>
       </section>
