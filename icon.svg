@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="72" fill="#181816"/>
+  <path d="M96 364L256 244L416 364V404H96V364Z" fill="#C85A17"/>
+  <rect x="136" y="344" width="240" height="60" fill="#FAF9F6"/>
+  <text x="256" y="205" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="148" font-weight="800" fill="#FFFFFF">İF</text>
+</svg>
