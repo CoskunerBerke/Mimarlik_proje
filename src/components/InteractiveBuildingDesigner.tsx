@@ -267,25 +267,25 @@ export const InteractiveBuildingDesigner: React.FC<InteractiveBuildingDesignerPr
           <button
             type="button"
             onClick={() => setTool('draw')}
-            className={`px-3 py-1.5 font-bold border transition flex items-center gap-1.5 ${
+            className={`px-3 py-2 font-bold border transition flex items-center gap-1.5 ${
               tool === 'draw'
                 ? 'bg-[#C85A17] text-white border-[#C85A17]'
                 : 'bg-white text-[#181816] border-stone-300 hover:bg-stone-50'
             }`}
           >
-            <PenTool className="w-3.5 h-3.5" /> 1. Arsa Üzerinde Fareyle Bina Çiz
+            <PenTool className="w-3.5 h-3.5 shrink-0" /> 1. Dokunarak / Fareyle Bina Çiz
           </button>
 
           <button
             type="button"
             onClick={() => setTool('select')}
-            className={`px-3 py-1.5 font-bold border transition flex items-center gap-1.5 ${
+            className={`px-3 py-2 font-bold border transition flex items-center gap-1.5 ${
               tool === 'select'
                 ? 'bg-[#181816] text-white border-[#181816]'
                 : 'bg-white text-[#181816] border-stone-300 hover:bg-stone-50'
             }`}
           >
-            <MousePointer className="w-3.5 h-3.5" /> 2. Blok Taşı & Boyutlandır
+            <MousePointer className="w-3.5 h-3.5 shrink-0" /> 2. Blok Taşı & Boyutlandır
           </button>
 
           {tool === 'draw' && (
@@ -648,16 +648,9 @@ export const InteractiveBuildingDesigner: React.FC<InteractiveBuildingDesignerPr
                   {b.width}×{b.depth}m · {b.floors}K
                 </text>
 
-                {/* Sağ-Alt Boyutlandırma Tutamacı */}
+                {/* Sağ-Alt Boyutlandırma Tutamacı (Dokunmatik Parmak & Kalem Uyumlu Geniş Alan) */}
                 {isSel && tool === 'select' && (
-                  <rect
-                    x={bx + b.width - 1.3}
-                    y={bz + b.depth - 1.3}
-                    width={2.2}
-                    height={2.2}
-                    fill="#C85A17"
-                    stroke="#FFFFFF"
-                    strokeWidth={0.25}
+                  <g
                     style={{ cursor: 'nwse-resize' }}
                     onPointerDown={(ev) => {
                       ev.stopPropagation();
@@ -671,7 +664,24 @@ export const InteractiveBuildingDesigner: React.FC<InteractiveBuildingDesignerPr
                         anchorNorth: bz,
                       });
                     }}
-                  />
+                  >
+                    <rect
+                      x={bx + b.width - 3.6}
+                      y={bz + b.depth - 3.6}
+                      width={6.2}
+                      height={6.2}
+                      fill="transparent"
+                    />
+                    <rect
+                      x={bx + b.width - 1.8}
+                      y={bz + b.depth - 1.8}
+                      width={3.0}
+                      height={3.0}
+                      fill="#C85A17"
+                      stroke="#FFFFFF"
+                      strokeWidth={0.3}
+                    />
+                  </g>
                 )}
               </g>
             );

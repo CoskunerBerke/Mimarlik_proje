@@ -48,13 +48,35 @@ export const TerrainSoil3DBlock: React.FC<TerrainSoil3DBlockProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const rootGroupRef = useRef<THREE.Group | null>(null);
+  const controlsInstanceRef = useRef<OrbitControls | null>(null);
+  const canvasElRef = useRef<HTMLCanvasElement | null>(null);
   const [exaggerate, setExaggerate] = useState(false);
+  const [isCoarseTouch, setIsCoarseTouch] = useState(false);
+  const [touchOrbitEnabled, setTouchOrbitEnabled] = useState(false);
 
   const isFlat = effectiveSlopePct < 2.5;
 
   useEffect(() => {
+    const coarse =
+      typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
+    setIsCoarseTouch(Boolean(coarse));
+    setTouchOrbitEnabled(!coarse);
+  }, []);
+
+  useEffect(() => {
+    if (controlsInstanceRef.current && canvasElRef.current) {
+      const active = !isCoarseTouch || touchOrbitEnabled;
+      controlsInstanceRef.current.enabled = active;
+      canvasElRef.current.style.touchAction = active ? 'none' : 'pan-y';
+    }
+  }, [isCoarseTouch, touchOrbitEnabled]);
+
+  useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
+
+    const isMobileScreen = window.innerWidth < 640;
+    const coarseNow = window.matchMedia?.('(pointer: coarse)').matches ?? false;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#EFECE4');
@@ -67,12 +89,13 @@ export const TerrainSoil3DBlock: React.FC<TerrainSoil3DBlockProps> = ({
     );
     camera.position.set(145, 95, 155);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobileScreen ? 1.5 : 2));
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.shadowMap.enabled = true;
     el.innerHTML = '';
     el.appendChild(renderer.domElement);
+    canvasElRef.current = renderer.domElement;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -81,6 +104,9 @@ export const TerrainSoil3DBlock: React.FC<TerrainSoil3DBlockProps> = ({
     controls.minDistance = 70;
     controls.maxDistance = 320;
     controls.target.set(0, -2, 0);
+    controls.enabled = !coarseNow;
+    renderer.domElement.style.touchAction = coarseNow ? 'pan-y' : 'none';
+    controlsInstanceRef.current = controls;
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0xc7c1b2, 0.85));
     const dirLight = new THREE.DirectionalLight(0xfff5e4, 1.45);
@@ -262,24 +288,42 @@ export const TerrainSoil3DBlock: React.FC<TerrainSoil3DBlockProps> = ({
         </button>
       </div>
 
-      {/* 3D Topoğrafya & Zemin Kesiti Sahnesi */}
-      <div ref={mountRef} className="w-full h-72 cursor-grab active:cursor-grabbing" />
+      {/* 3D Topoğrafya & Zemin Kesiti Sahnesi (Mobil Sayfa Kaydırma Korumalı) */}
+      <div className="relative w-full">
+        <div
+          ref={mountRef}
+          className="w-full h-60 sm:h-72 cursor-grab active:cursor-grabbing"
+        />
+        {isCoarseTouch && (
+          <button
+            type="button"
+            onClick={() => setTouchOrbitEnabled((v) => !v)}
+            className={`absolute bottom-2.5 right-2.5 px-3 py-1.5 text-xs font-bold border shadow-sm transition ${
+              touchOrbitEnabled
+                ? 'bg-[#C85A17] text-white border-[#C85A17]'
+                : 'bg-white/95 text-[#181816] border-stone-300'
+            }`}
+          >
+            {touchOrbitEnabled ? '✓ 3D Döndürme Açık (Kilitle)' : 'Parmağınızla 3D Çevirmek İçin Dokunun'}
+          </button>
+        )}
+      </div>
 
       {/* Alt Katman Açıklaması (Çakışmasız Temiz Şerit) */}
-      <div className="px-4 py-2.5 bg-[#FAF9F6] border-t border-stone-200 flex flex-wrap items-center justify-between gap-3 text-xs text-stone-600">
-        <div className="flex flex-wrap items-center gap-4">
+      <div className="px-3.5 sm:px-4 py-2.5 bg-[#FAF9F6] border-t border-stone-200 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-600">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1">
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-3 inline-block bg-[#6B705C]" /> Üst Toprak (0–80 cm)
+            <span className="w-3 h-3 inline-block bg-[#6B705C] shrink-0" /> Üst Toprak (0–80 cm)
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-3 inline-block bg-[#A68A6D]" /> Alt Zemin: {soilTitle} ({soilClass})
+            <span className="w-3 h-3 inline-block bg-[#A68A6D] shrink-0" /> Alt Zemin: {soilTitle} ({soilClass})
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-3 inline-block bg-[#57534E]" /> Derin Ana Kayaç
+            <span className="w-3 h-3 inline-block bg-[#57534E] shrink-0" /> Derin Ana Kayaç
           </span>
         </div>
         <div className="font-mono text-[11px] text-stone-500">
-          Min. Temel Don Derinliği: -{minFrostDepthCm} cm · Fareyle 3D çevirebilirsiniz
+          Min. Temel Don Derinliği: -{minFrostDepthCm} cm · Dokunarak veya fareyle 3D inceleyin
         </div>
       </div>
     </div>

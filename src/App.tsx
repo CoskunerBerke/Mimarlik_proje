@@ -63,6 +63,7 @@ import {
   FileUp,
   Layers,
   Loader2,
+  LocateFixed,
   MapPin,
   Mountain,
   PenTool,
@@ -303,6 +304,8 @@ export const App: React.FC = () => {
     }
   };
 
+  const [gpsLoading, setGpsLoading] = useState(false);
+
   const handleMapPinPick = async (lat: number, lng: number) => {
     const exactLat = Number(lat.toFixed(6));
     const exactLng = Number(lng.toFixed(6));
@@ -316,6 +319,31 @@ export const App: React.FC = () => {
     });
     setLocationText(rev.shortTitle);
     setShowSuggestions(false);
+  };
+
+  const handleUseDeviceGps = () => {
+    if (!navigator.geolocation) {
+      setErrorMsg('Cihazınız veya tarayıcınız GPS konum özelliğini desteklemiyor.');
+      return;
+    }
+    setGpsLoading(true);
+    setErrorMsg(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          await handleMapPinPick(pos.coords.latitude, pos.coords.longitude);
+        } finally {
+          setGpsLoading(false);
+        }
+      },
+      () => {
+        setGpsLoading(false);
+        setErrorMsg(
+          'GPS konum izni alınamadı. Tarayıcınızdan konum izni verebilir veya uydu haritasından arsanıza dokunabilirsiniz.'
+        );
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const runFullAnalysis = async (
@@ -512,17 +540,19 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
 
   return (
     <div className="min-h-screen bg-[#F8F8F6] text-[#181816]">
-      {/* ÜST BAŞLIK */}
-      <header className="bg-white border-b border-stone-200">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="w-9 h-9 bg-[#181816] text-white flex items-center justify-center font-bold text-sm">
+      {/* ÜST BAŞLIK (Telefon, Tablet ve Masaüstü Uyumlu Sabit Bar) */}
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-stone-200">
+        <div className="max-w-4xl mx-auto px-3.5 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-[#181816] text-white flex items-center justify-center font-bold text-xs sm:text-sm shrink-0">
               İF
             </div>
-            <div>
-              <div className="font-bold text-base tracking-tight">İKLİMFORM</div>
-              <div className="text-xs text-stone-500">
-                Veriye Dayalı Mimari Arazi, İklim, Kütle ve Malzeme Analiz Aracı
+            <div className="min-w-0">
+              <div className="font-bold text-sm sm:text-base tracking-tight truncate">
+                İKLİMFORM
+              </div>
+              <div className="text-[11px] sm:text-xs text-stone-500 truncate">
+                Mimari Arazi, İklim, Zemin & 3D Tasarım Stüdyosu
               </div>
             </div>
           </div>
@@ -530,19 +560,25 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
           {bundle && (
             <button
               onClick={handleDownloadMarkdown}
-              className="px-3.5 py-2 bg-[#181816] hover:bg-stone-800 text-white text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="px-3 sm:px-3.5 py-2 bg-[#181816] hover:bg-stone-800 text-white text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap shrink-0"
             >
-              <Download className="w-3.5 h-3.5" /> Raporu İndir (.MD)
+              <Download className="w-3.5 h-3.5" />
+              <span className="sm:hidden">Rapor</span>
+              <span className="hidden sm:inline">Raporu İndir (.MD)</span>
             </button>
           )}
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-8">
+      <main
+        className={`max-w-4xl mx-auto px-3.5 sm:px-6 py-5 sm:py-10 space-y-6 sm:space-y-8 ${
+          bundle ? 'pb-24 md:pb-12' : ''
+        }`}
+      >
         {/* =================================================================== */}
         {/* 1. SİTENİN AMACI NEDİR?                                             */}
         {/* =================================================================== */}
-        <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-5">
+        <section className="bg-white border border-stone-200 p-4 sm:p-8 space-y-4 sm:space-y-5">
           <div className="space-y-2">
             <div className="text-xs font-bold uppercase tracking-wider text-[#C85A17]">
               Bu Araç Ne İşe Yarar?
@@ -593,7 +629,10 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
         {/* =================================================================== */}
         {/* 2. HASSAS KONUM VE BİNA TASARIM GİRİŞ KUTUSU                         */}
         {/* =================================================================== */}
-        <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-5">
+        <section
+          id="bolum-konum"
+          className="scroll-mt-16 bg-white border border-stone-200 p-4 sm:p-8 space-y-5"
+        >
           <h2 className="text-base sm:text-lg font-bold text-[#181816]">
             Çalışacağınız Tam Arsayı ve İstediğiniz Binayı Belirleyin
           </h2>
@@ -668,14 +707,33 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowMapSelector((v) => !v)}
-                className="px-4 py-3 border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
-              >
-                <MapPin className="w-4 h-4 text-[#C85A17]" />
-                {showMapSelector ? 'Uydu Haritasını Kapat' : 'Uydu Haritasından Tam Arsa Seç'}
-              </button>
+              <div className="grid grid-cols-2 sm:flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={gpsLoading}
+                  onClick={handleUseDeviceGps}
+                  className="px-3.5 py-3 border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  {gpsLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-[#C85A17]" />
+                  ) : (
+                    <LocateFixed className="w-4 h-4 text-[#C85A17]" />
+                  )}
+                  GPS Konumum
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMapSelector((v) => !v)}
+                  className="px-3.5 py-3 border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <MapPin className="w-4 h-4 text-[#C85A17]" />
+                  <span className="sm:hidden">{showMapSelector ? 'Kapat' : 'Harita Seç'}</span>
+                  <span className="hidden sm:inline">
+                    {showMapSelector ? 'Uydu Haritasını Kapat' : 'Uydu Haritasından Tam Arsa Seç'}
+                  </span>
+                </button>
+              </div>
             </form>
 
             {/* Kilitlenen Tam Koordinat Teyit Satırı */}
@@ -1020,6 +1078,53 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
           />
         )}
       </main>
+
+      {/* MOBİL HIZLI ERİŞİM ALT ÇUBUĞU (Telefonlar için Tek Parmak Bölüm Geçişi) */}
+      {bundle && (
+        <nav
+          aria-label="Mobil hızlı bölüm menüsü"
+          className="fixed bottom-0 inset-x-0 z-40 md:hidden bg-white/95 backdrop-blur border-t border-stone-300 safe-bottom-pad"
+        >
+          <div className="grid grid-cols-5 divide-x divide-stone-200 text-[11px] font-bold text-[#181816]">
+            <a
+              href="#bolum-konum"
+              className="py-2.5 flex flex-col items-center justify-center gap-0.5 active:bg-stone-100"
+            >
+              <MapPin className="w-3.5 h-3.5 text-[#C85A17]" />
+              <span>Konum</span>
+            </a>
+            <a
+              href="#bolum-3d"
+              className="py-2.5 flex flex-col items-center justify-center gap-0.5 active:bg-stone-100"
+            >
+              <Box className="w-3.5 h-3.5 text-[#C85A17]" />
+              <span>3D Bina</span>
+            </a>
+            <a
+              href="#bolum-iklim"
+              className="py-2.5 flex flex-col items-center justify-center gap-0.5 active:bg-stone-100"
+            >
+              <Wind className="w-3.5 h-3.5 text-sky-700" />
+              <span>İklim</span>
+            </a>
+            <a
+              href="#bolum-zemin"
+              className="py-2.5 flex flex-col items-center justify-center gap-0.5 active:bg-stone-100"
+            >
+              <Mountain className="w-3.5 h-3.5 text-[#15803D]" />
+              <span>Zemin</span>
+            </a>
+            <button
+              type="button"
+              onClick={handleDownloadMarkdown}
+              className="py-2.5 flex flex-col items-center justify-center gap-0.5 bg-[#181816] text-white active:bg-stone-800"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>İndir</span>
+            </button>
+          </div>
+        </nav>
+      )}
     </div>
   );
 };
@@ -1209,7 +1314,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       {/* ===================================================================== */}
       {/* YÖNETİCİ ÖZETİ + DOĞRULANMIŞ UYDU PARSEL HARİTASI                      */}
       {/* ===================================================================== */}
-      <section className="bg-white border-2 border-[#181816] p-6 sm:p-8 space-y-5">
+      <section className="bg-white border-2 border-[#181816] p-4 sm:p-8 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-stone-200 pb-4">
           <div>
             <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#15803D]">
@@ -1303,18 +1408,18 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       {/* ===================================================================== */}
       {/* 3 MODLU GERÇEKÇİ 3D STÜDYO: OTOMATİK / PROJE YÜKLE / KENDİ BİNANI YAP */}
       {/* ===================================================================== */}
-      <section className="bg-white border border-stone-200">
+      <section id="bolum-3d" className="scroll-mt-16 bg-white border border-stone-200">
         <button
           type="button"
           onClick={() => setShow3DStudio(!show3DStudio)}
-          className="w-full px-6 py-5 flex items-center justify-between text-left hover:bg-stone-50 transition"
+          className="w-full px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between text-left hover:bg-stone-50 transition"
         >
           <div>
             <span className="font-mono text-xs font-bold text-[#C85A17]">
               GERÇEKÇİ 3D MİMARİ STÜDYO · PROJE YÜKLE VEYA KENDİ BİNANI TASARLA
             </span>
             <h3 className="text-base sm:text-lg font-bold text-[#181816] mt-0.5">
-              3D Bina Yerleşimi, PDF / CAD / 3D Proje Sürükleme ve Sıfırdan Kendi Binanı Yapma Alanı
+              3D Bina Yerleşimi, PDF / CAD / 3D Proje Yükleme ve Sıfırdan Kendi Binanı Yapma Alanı
             </h3>
           </div>
           {show3DStudio ? (
@@ -1325,7 +1430,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
         </button>
 
         {show3DStudio && (
-          <div className="p-6 pt-3 border-t border-stone-200 space-y-5">
+          <div className="p-3.5 sm:p-6 pt-3 border-t border-stone-200 space-y-4 sm:space-y-5">
             {/* 3 NET TASARIM MODU SEKMESİ */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
@@ -1819,24 +1924,26 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
               </div>
             )}
 
-            {/* Mevsim, Saat ve Dışa Aktarma Kontrolleri */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#FAF9F6] border border-stone-200 p-3 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                {SEASON_META.map((s) => (
-                  <button
-                    key={s.key}
-                    onClick={() => setSeason(s.key)}
-                    className={`px-3 py-1.5 font-semibold border ${
-                      season === s.key
-                        ? 'bg-[#181816] text-white border-[#181816]'
-                        : 'bg-white text-stone-700 border-stone-300'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-                <div className="flex items-center gap-2 pl-2">
-                  <span>Saat:</span>
+            {/* Mevsim, Saat ve Dışa Aktarma Kontrolleri (Mobil & Masaüstü Ergonomik) */}
+            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-3 bg-[#FAF9F6] border border-stone-200 p-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                <div className="grid grid-cols-4 sm:flex gap-1.5 w-full sm:w-auto">
+                  {SEASON_META.map((s) => (
+                    <button
+                      key={s.key}
+                      onClick={() => setSeason(s.key)}
+                      className={`px-1.5 sm:px-3 py-2 sm:py-1.5 text-[11px] sm:text-xs font-semibold border text-center whitespace-nowrap ${
+                        season === s.key
+                          ? 'bg-[#181816] text-white border-[#181816]'
+                          : 'bg-white text-stone-700 border-stone-300'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 w-full sm:w-auto pt-1 sm:pt-0 sm:pl-2">
+                  <span className="shrink-0">Saat:</span>
                   <input
                     type="range"
                     min={6}
@@ -1844,9 +1951,11 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                     step={0.25}
                     value={solarHour}
                     onChange={(e) => setSolarHour(Number(e.target.value))}
-                    className="w-28"
+                    className="flex-1 sm:w-28"
                   />
-                  <strong className="font-mono">{Math.floor(solarHour)}:00</strong>
+                  <strong className="font-mono w-11 text-right shrink-0">
+                    {Math.floor(solarHour)}:00
+                  </strong>
                 </div>
               </div>
 
@@ -2291,7 +2400,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       {/* ===================================================================== */}
       {/* BÖLÜM 1: GERÇEK RÜZGAR, GÜNEŞ VE 4 MEVSİM İKLİM KANITLARI              */}
       {/* ===================================================================== */}
-      <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-6">
+      <section
+        id="bolum-iklim"
+        className="scroll-mt-16 bg-white border border-stone-200 p-4 sm:p-8 space-y-5 sm:space-y-6"
+      >
         <div className="border-b border-stone-200 pb-3">
           <span className="font-mono text-xs font-bold text-[#C85A17]">BÖLÜM 01 · İKLİM VE RÜZGAR</span>
           <h3 className="text-lg font-bold text-[#181816] mt-0.5">
@@ -2303,7 +2415,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
         </div>
 
         {ce.liveNow && (
-          <div className="bg-[#FAF9F5] border border-stone-300 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="bg-[#FAF9F5] border border-stone-300 px-3.5 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
             <div>
               <span className="font-bold text-[#15803D] uppercase tracking-wider mr-2">
                 ● Canlı Saha Gözlemi ({ce.liveNow.observedAt}):
@@ -2327,24 +2439,27 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
 
         <div className="space-y-3">
           <div className="text-sm font-bold text-[#181816] flex items-center gap-2">
-            <Wind className="w-4 h-4 text-sky-700" />
-            Yıllık Gerçek Rüzgar Esme Yönleri ve Yüzdeleri (Maks. Fırtına Hamlesi:{' '}
-            {ce.maxWindGustKmh} km/sa)
+            <Wind className="w-4 h-4 text-sky-700 shrink-0" />
+            <span>
+              Yıllık Gerçek Rüzgar Esme Yönleri ve Yüzdeleri (Maks. Hamle: {ce.maxWindGustKmh} km/sa)
+            </span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {ce.annualWindRose.slice(0, 6).map((w) => (
               <div
                 key={w.code}
-                className="bg-[#FAF9F6] border border-stone-200 px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs"
+                className="bg-[#FAF9F6] border border-stone-200 px-3 py-2.5 flex items-center justify-between gap-2.5 text-xs"
               >
-                <span className="font-semibold text-[#181816] w-40 shrink-0">{w.name}</span>
+                <span className="font-semibold text-[#181816] w-32 sm:w-40 truncate shrink-0">
+                  {w.name}
+                </span>
                 <div className="flex-1 h-2 bg-stone-200 overflow-hidden">
                   <div
                     className="h-full bg-sky-700"
                     style={{ width: `${Math.min(100, w.frequencyPct * 1.6)}%` }}
                   />
                 </div>
-                <span className="font-mono font-bold text-[#181816] w-10 text-right">
+                <span className="font-mono font-bold text-[#181816] w-9 text-right shrink-0">
                   %{w.frequencyPct}
                 </span>
               </div>
@@ -2352,7 +2467,33 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto border border-stone-200">
+        {/* Mobil Ekranlar İçin Kaydırmasız 4 Mevsim Kartları */}
+        <div className="grid grid-cols-1 gap-2.5 sm:hidden text-xs">
+          {SEASON_META.map((smItem) => {
+            const st = city.seasons[smItem.key];
+            const topW = ce.seasonalWindTop[smItem.key];
+            return (
+              <div key={smItem.key} className="border border-stone-200 bg-[#FAF9F6] p-3 space-y-1">
+                <div className="flex items-center justify-between">
+                  <strong className="text-sm text-[#181816]">{smItem.label}</strong>
+                  <span className="font-mono font-semibold text-[#181816]">
+                    Ort. {st.avgTempC}°C ({st.minTempC}° / {st.maxTempC}°C)
+                  </span>
+                </div>
+                <div className="text-stone-700">
+                  Hakim Rüzgar: <strong>{topW[0]?.name} (%{topW[0]?.frequencyPct})</strong> ·{' '}
+                  {st.windSpeedMs} m/s
+                </div>
+                <div className="text-stone-500">
+                  Nem: %{st.humidityPct} · Yağış: {st.precipitationMm} mm
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Tablet ve Masaüstü İçin 4 Mevsim Tablosu */}
+        <div className="hidden sm:block overflow-x-auto border border-stone-200">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead className="bg-[#FAF9F6] border-b border-stone-200 text-xs text-stone-600">
               <tr>
@@ -2429,7 +2570,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       {/* ===================================================================== */}
       {/* BÖLÜM 2: TOPOĞRAFYA, TOPRAK/ZEMİN VE KAÇ KİLO KÜTLELİ BİNA OLMALI?    */}
       {/* ===================================================================== */}
-      <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-6">
+      <section
+        id="bolum-zemin"
+        className="scroll-mt-16 bg-white border border-stone-200 p-4 sm:p-8 space-y-5 sm:space-y-6"
+      >
         <div className="border-b border-stone-200 pb-3">
           <span className="font-mono text-xs font-bold text-[#C85A17]">
             BÖLÜM 02 · TOPOĞRAFYA, TOPRAK YAPISI VE BİNA AĞIRLIĞI
@@ -2625,7 +2769,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       {/* ===================================================================== */}
       {/* BÖLÜM 3: OPTİMAL BİNA KÜTLESİ, AVLU VE ODA METREKARE YERLEŞİMİ        */}
       {/* ===================================================================== */}
-      <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-6">
+      <section className="bg-white border border-stone-200 p-4 sm:p-8 space-y-5 sm:space-y-6">
         <div className="border-b border-stone-200 pb-3">
           <span className="font-mono text-xs font-bold text-[#C85A17]">
             BÖLÜM 03 · KÜTLE, AVLU VE MEKAN DAĞILIMI
@@ -2636,7 +2780,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </h3>
         </div>
 
-        <div className="bg-[#FAF9F6] border border-stone-300 p-5 space-y-3">
+        <div className="bg-[#FAF9F6] border border-stone-300 p-4 sm:p-5 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <span className="text-xs font-bold text-[#15803D]">İKLİMSEL YERLEŞİM PRENSİBİ</span>
@@ -2670,7 +2814,24 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto border border-stone-200">
+        {/* Mobil Ekranlar İçin Kaydırmasız Oda/Mekan Kartları */}
+        <div className="grid grid-cols-1 gap-2.5 sm:hidden text-xs">
+          {prog.spaces.map((sp) => (
+            <div key={sp.id} className="border border-stone-200 bg-[#FAF9F6] p-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <strong className="text-[#181816]">{sp.name}</strong>
+                <span className="font-mono font-bold text-[#181816] shrink-0">
+                  {Math.round((targetAreaM2 * sp.ratioPct) / 100).toLocaleString('tr-TR')} m²
+                </span>
+              </div>
+              <div className="font-semibold text-[#C85A17]">Yön: {sp.preferredOrientation}</div>
+              <p className="text-stone-600 leading-relaxed">{sp.notes}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Tablet ve Masaüstü İçin Mekan Tablosu */}
+        <div className="hidden sm:block overflow-x-auto border border-stone-200">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead className="bg-[#FAF9F6] border-b border-stone-200 text-xs text-stone-600">
               <tr>

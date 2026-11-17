@@ -21,7 +21,18 @@ import {
   TerrainSamplerConfig,
 } from '../engine/terrainMeshHelper';
 import { Imported3DModelData, PlanUnderlayData } from '../engine/projectFileImporter';
-import { Compass, Eye, FileUp, Layers, Play, Pause, Sun, Wind } from 'lucide-react';
+import {
+  Compass,
+  Eye,
+  FileUp,
+  Layers,
+  Maximize2,
+  Minimize2,
+  Play,
+  Pause,
+  Sun,
+  Wind,
+} from 'lucide-react';
 
 interface Viewport3DProps {
   city: CityClimateProfile;
@@ -589,6 +600,19 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [colorMode, setColorMode] = useState<'role' | 'material'>('material');
   const [isPlayingDay, setIsPlayingDay] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const onSelectBlockRef = useRef(onSelectBlock);
+  onSelectBlockRef.current = onSelectBlock;
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isFullscreen]);
 
   const solarPos: SolarPosition = calculateSolarPosition(city.lat, dayOfYear, solarHour);
   const seasonStats = city.seasons[season];
@@ -623,13 +647,16 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     camera.position.set(68, 62, 78);
     cameraRef.current = camera;
 
+    const isMobileScreen = window.innerWidth < 640;
+
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobileScreen ? 1.5 : 2));
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
+    renderer.domElement.style.touchAction = 'none';
     el.innerHTML = '';
     el.appendChild(renderer.domElement);
 
@@ -648,8 +675,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     const sunLight = new THREE.DirectionalLight(0xfff5e0, 1.95);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
+    const shadowRes = isMobileScreen ? 1024 : 2048;
+    sunLight.shadow.mapSize.width = shadowRes;
+    sunLight.shadow.mapSize.height = shadowRes;
     sunLight.shadow.camera.near = 5;
     sunLight.shadow.camera.far = 320;
     const dCam = 95;
@@ -670,7 +698,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     scene.add(envOverlay);
     envOverlayRef.current = envOverlay;
 
-    // Tıklama ile 3D kütle seçimi (Raycaster)
+    // Dokunma & Tıklama ile 3D kütle seçimi (Mobil parmak toleranslı Raycaster)
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let downX = 0;
@@ -682,7 +710,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     };
 
     const onPointerUp = (ev: PointerEvent) => {
-      if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 6) return;
+      const maxMove = ev.pointerType === 'touch' ? 16 : 6;
+      if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > maxMove) return;
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
@@ -695,7 +724,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         while (hitObj) {
           const found = selectableMeshesRef.current.find((s) => s.mesh === hitObj);
           if (found) {
-            onSelectBlock(found.blockId);
+            onSelectBlockRef.current(found.blockId);
             return;
           }
           hitObj = hitObj.parent;
@@ -1652,14 +1681,18 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const isFlatSite = effectiveSlopePct < 2.5;
 
   return (
-    <div className="w-full flex flex-col bg-white border border-stone-300 overflow-hidden select-none">
-      {/* Üst Kontrol Çubuğu (3D Tuvalin Üstünde — Asla Üst Üste Binmez) */}
-      <div className="px-3 py-2 bg-[#FAF9F6] border-b border-stone-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+    <div
+      className={`w-full flex flex-col bg-white border border-stone-300 overflow-hidden select-none ${
+        isFullscreen ? 'fixed inset-0 z-50 h-[100dvh] border-0' : ''
+      }`}
+    >
+      {/* Üst Kontrol Çubuğu (Mobil, Tablet ve Masaüstü Uyumlu — Asla Üst Üste Binmez) */}
+      <div className="px-2.5 sm:px-3 py-2 bg-[#FAF9F6] border-b border-stone-200 flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setIsPlayingDay((p) => !p)}
-            className={`px-2.5 py-1 font-semibold border transition flex items-center gap-1 whitespace-nowrap ${
+            className={`px-2.5 py-1.5 font-semibold border transition flex items-center gap-1 whitespace-nowrap ${
               isPlayingDay
                 ? 'bg-amber-600 text-white border-amber-700'
                 : 'bg-[#161615] text-white border-[#161615] hover:bg-stone-800'
@@ -1672,20 +1705,20 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           <button
             type="button"
             onClick={() => setShowSunPath((v) => !v)}
-            className={`px-2.5 py-1 font-medium border transition flex items-center gap-1 whitespace-nowrap ${
+            className={`px-2.5 py-1.5 font-medium border transition flex items-center gap-1 whitespace-nowrap ${
               showSunPath
                 ? 'bg-white text-[#161615] border-stone-400 font-semibold'
                 : 'bg-stone-100 text-stone-500 border-stone-300'
             }`}
           >
             <Sun className="w-3.5 h-3.5 text-amber-500" />
-            Güneş Yolu
+            Güneş
           </button>
 
           <button
             type="button"
             onClick={() => setShowWindFlow((v) => !v)}
-            className={`px-2.5 py-1 font-medium border transition flex items-center gap-1 whitespace-nowrap ${
+            className={`px-2.5 py-1.5 font-medium border transition flex items-center gap-1 whitespace-nowrap ${
               showWindFlow
                 ? 'bg-white text-[#161615] border-stone-400 font-semibold'
                 : 'bg-stone-100 text-stone-500 border-stone-300'
@@ -1698,10 +1731,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           <button
             type="button"
             onClick={() => setColorMode((m) => (m === 'role' ? 'material' : 'role'))}
-            className="px-2.5 py-1 font-medium bg-white text-[#161615] border border-stone-300 hover:bg-stone-50 transition flex items-center gap-1 whitespace-nowrap"
+            className="px-2.5 py-1.5 font-medium bg-white text-[#161615] border border-stone-300 hover:bg-stone-50 transition flex items-center gap-1 whitespace-nowrap"
           >
             <Layers className="w-3.5 h-3.5" />
-            {colorMode === 'material' ? 'Görünüm: Gerçekçi Mimari' : 'Görünüm: Zon Diyagramı'}
+            <span className="sm:hidden">
+              {colorMode === 'material' ? 'Gerçekçi' : 'Zon Rengi'}
+            </span>
+            <span className="hidden sm:inline">
+              {colorMode === 'material' ? 'Görünüm: Gerçekçi Mimari' : 'Görünüm: Zon Diyagramı'}
+            </span>
           </button>
         </div>
 
@@ -1709,30 +1747,46 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           <button
             type="button"
             onClick={() => setCameraPreset('iso')}
-            className="px-2.5 py-1 hover:bg-stone-100 font-medium flex items-center gap-1 whitespace-nowrap"
+            className="px-2.5 py-1.5 hover:bg-stone-100 font-medium flex items-center gap-1 whitespace-nowrap"
           >
             <Eye className="w-3.5 h-3.5" /> 3D Açı
           </button>
           <button
             type="button"
             onClick={() => setCameraPreset('top')}
-            className="px-2.5 py-1 hover:bg-stone-100 font-medium whitespace-nowrap"
+            className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
           >
             Üst Plan
           </button>
           <button
             type="button"
             onClick={() => setCameraPreset('south')}
-            className="px-2.5 py-1 hover:bg-stone-100 font-medium whitespace-nowrap"
+            className="px-2.5 py-1.5 hover:bg-stone-100 font-medium whitespace-nowrap"
           >
-            Güney Cephe
+            Güney
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((f) => !f)}
+            className="px-2.5 py-1.5 bg-[#FAF9F6] hover:bg-stone-200 font-semibold flex items-center gap-1 whitespace-nowrap text-[#181816]"
+            title={isFullscreen ? 'Tam ekrandan çık' : '3D sahneyi tam ekran aç'}
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5 text-[#C85A17]" /> Küçült
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5 text-[#C85A17]" /> Tam Ekran
+              </>
+            )}
           </button>
         </div>
       </div>
 
       {/* Three.js 3D Tuval + Doğrudan Proje Dosyası Sürükle-Bırak Desteği */}
       <div
-        className="relative w-full"
+        className={`relative w-full ${isFullscreen ? 'flex-1 min-h-0' : ''}`}
         onDragOver={(e) => {
           if (!onDropProjectFile) return;
           e.preventDefault();
@@ -1749,7 +1803,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       >
         <div
           ref={containerRef}
-          className="w-full h-[380px] sm:h-[430px] cursor-grab active:cursor-grabbing bg-[#EAE7DF]"
+          className={`w-full cursor-grab active:cursor-grabbing bg-[#EAE7DF] ${
+            isFullscreen ? 'h-full min-h-[280px]' : 'h-[330px] sm:h-[430px]'
+          }`}
         />
 
         {isDraggingFile && (
@@ -1766,7 +1822,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       </div>
 
       {/* Alt Bilgi ve Renk Anlamları Çubuğu (Tuvalin Altında — Sıfır Çakışma) */}
-      <div className="px-3.5 py-2.5 bg-[#FAF9F6] border-t border-stone-200 space-y-2 text-xs">
+      <div className="px-3 sm:px-3.5 py-2.5 bg-[#FAF9F6] border-t border-stone-200 space-y-2 text-xs safe-bottom-pad">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 font-semibold text-[#161615]">
             <Compass className="w-4 h-4 text-[#C85A17] shrink-0" />
@@ -1781,7 +1837,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             </span>
           </div>
           <span className="text-[11px] text-stone-500">
-            Çatısını değiştirmek istediğiniz 3D bloğun üzerine tıklayın
+            Düzenlemek istediğiniz 3D bloğa dokunun / tıklayın
           </span>
         </div>
 

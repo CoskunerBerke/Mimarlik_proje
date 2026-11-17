@@ -204,39 +204,41 @@ export const SiteMapPicker: React.FC<SiteMapPickerProps> = ({
 
   return (
     <div className="relative w-full border border-stone-300 overflow-hidden bg-stone-100">
-      {/* Üst Katman Seçici Çubuk */}
-      <div className="bg-[#FAF9F6] border-b border-stone-200 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-1.5">
+      {/* Üst Katman Seçici Çubuk (Mobil & Masaüstü Uyumlu) */}
+      <div className="bg-[#FAF9F6] border-b border-stone-200 px-2.5 sm:px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setLayerMode('satellite')}
-            className={`px-2.5 py-1 font-semibold border transition ${
+            className={`px-2.5 py-1.5 font-semibold border transition whitespace-nowrap ${
               layerMode === 'satellite'
                 ? 'bg-[#181816] text-white border-[#181816]'
                 : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
             }`}
           >
-            Uydu Görünümü (Tam Parsel & Çatılar)
+            <span className="sm:hidden">Uydu (Parsel)</span>
+            <span className="hidden sm:inline">Uydu Görünümü (Tam Parsel & Çatılar)</span>
           </button>
           <button
             type="button"
             onClick={() => setLayerMode('street')}
-            className={`px-2.5 py-1 font-semibold border transition ${
+            className={`px-2.5 py-1.5 font-semibold border transition whitespace-nowrap ${
               layerMode === 'street'
                 ? 'bg-[#181816] text-white border-[#181816]'
                 : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
             }`}
           >
-            Sokak & Mahalle Haritası
+            <span className="sm:hidden">Sokak</span>
+            <span className="hidden sm:inline">Sokak & Mahalle Haritası</span>
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           {layerMode === 'satellite' && imageryMeta && (
-            <span className="text-[11px] font-semibold text-[#15803D]">{imageryMeta}</span>
+            <span className="font-semibold text-[#15803D]">{imageryMeta}</span>
           )}
-          <span className="font-mono text-[11px] font-semibold text-[#181816]">
-            Seçili Nokta: {lat.toFixed(5)}°K, {lng.toFixed(5)}°D
+          <span className="font-mono font-semibold text-[#181816]">
+            {lat.toFixed(5)}°K, {lng.toFixed(5)}°D
           </span>
         </div>
       </div>
@@ -246,8 +248,8 @@ export const SiteMapPicker: React.FC<SiteMapPickerProps> = ({
       {interactivePick && (
         <div className="bg-white/95 border-t border-stone-200 px-3 py-2 text-xs text-stone-700 flex flex-wrap items-center justify-between gap-2">
           <span>
-            <strong>Tam Arsa Kilidi:</strong> Uydu görüntüsünde doğrudan kendi arsanızın üzerine
-            tıklayın veya turuncu pini sürükleyin; seçtiğiniz nokta milimetrik olarak korunur.
+            <strong>Tam Arsa Kilidi:</strong> Uydu görüntüsünde arsanızın üzerine dokunun / tıklayın
+            veya turuncu pini sürükleyin; seçtiğiniz nokta milimetrik olarak korunur.
           </span>
         </div>
       )}

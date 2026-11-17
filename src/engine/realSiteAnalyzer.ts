@@ -389,14 +389,7 @@ export async function resolveLocationInput(rawInput: string): Promise<{
     if (res.ok) {
       const arr = await res.json();
       if (Array.isArray(arr) && arr.length > 0) {
-        // Spesifik mahalle/sokak/bina eşleşmesi varsa kaba il merkezine tercih et
-        const hit =
-          arr.find((item: Record<string, unknown>) =>
-            /suburb|neighbourhood|quarter|road|building|amenity|school|mosque|university|hospital/i.test(
-              String(item.type || item.category || '')
-            )
-          ) || arr[0];
-
+        const hit = arr[0];
         const lat = Number(Number(hit.lat).toFixed(6));
         const lng = Number(Number(hit.lon).toFixed(6));
         const addr = (hit.address || {}) as Record<string, string | undefined>;
@@ -1031,11 +1024,17 @@ export async function fetchVerifiedSiteBundle(
   // NASA POWER Sürdürülebilir Binalar (community=SB) uydu verileri
   const nasaParams =
     nasaRes.status === 'fulfilled' ? nasaRes.value?.properties?.parameter || null : null;
-  const nasaSolarDailyKwh =
+  const nasaSolarRaw =
     nasaParams?.ALLSKY_SFC_SW_DWN?.ANN != null && nasaParams.ALLSKY_SFC_SW_DWN.ANN > 0
       ? Number(nasaParams.ALLSKY_SFC_SW_DWN.ANN)
       : null;
-  const nasaSolarKwhM2 = nasaSolarDailyKwh != null ? Math.round(nasaSolarDailyKwh * 365) : null;
+  // community=SB W/m² döndürür (~150-230 W/m² -> *8.76 = yıllık kWh/m²); kWh/m²/gün ise *365
+  const nasaSolarKwhM2 =
+    nasaSolarRaw != null
+      ? nasaSolarRaw > 25
+        ? Math.round((nasaSolarRaw * 24 * 365) / 1000)
+        : Math.round(nasaSolarRaw * 365)
+      : null;
   const windSpeed50mMs =
     nasaParams?.WS50M?.ANN != null && nasaParams.WS50M.ANN > 0
       ? Number(Number(nasaParams.WS50M.ANN).toFixed(1))
