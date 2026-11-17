@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BuildingFunctionKey,
   MassBlock,
@@ -18,11 +18,17 @@ import {
 import {
   computeSoilMassRecommendation,
   fetchVerifiedSiteBundle,
+  LocationSuggestion,
   resolveLocationInput,
   reverseGeocodeCoordinates,
+  searchLocationSuggestions,
   VerifiedSiteBundle,
 } from './engine/realSiteAnalyzer';
 import { generateTypologyRecommendations } from './engine/massingEngine';
+import {
+  buildRealisticArchitecturalMassing,
+  FUNCTION_DESIGN_PRESETS,
+} from './engine/buildingGenerator';
 import {
   analyzeBlockRoofPerformance,
   recommendOptimalRoofForBlock,
@@ -39,6 +45,7 @@ import { TerrainSoil3DBlock } from './components/TerrainSoil3DBlock';
 import { Viewport3D } from './components/Viewport3D';
 import {
   Box,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Compass,
@@ -51,6 +58,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Sliders,
   Sun,
   Trash2,
   Truck,
@@ -58,8 +66,8 @@ import {
 } from 'lucide-react';
 
 const DEFAULT_SITE: SiteParameters = {
-  parcelWidthM: 65,
-  parcelDepthM: 55,
+  parcelWidthM: 68,
+  parcelDepthM: 58,
   slopeDeg: 2,
   slopeAspect: 'Güney',
   maxTaks: 0.45,
@@ -68,6 +76,44 @@ const DEFAULT_SITE: SiteParameters = {
 };
 
 const EMPTY_NEIGHBORS: NeighborContextBlock[] = [];
+
+const DEFAULT_AREA_BY_FUNCTION: Record<BuildingFunctionKey, number> = {
+  villa: 340,
+  kindergarten: 950,
+  atelier: 1100,
+  religious: 1250,
+  agro: 1500,
+  library: 2200,
+  commercial: 2400,
+  custom: 2500,
+  residential: 2800,
+  sports: 2800,
+  hotel: 3000,
+  public_gov: 3200,
+  cultural: 3400,
+  dormitory: 3600,
+  education: 3800,
+  office: 4200,
+  transport: 4200,
+  mixed: 4500,
+  industrial: 4800,
+  healthcare: 5200,
+};
+
+const PROMPT_PLACEHOLDER_BY_FUNCTION: Partial<Record<BuildingFunctionKey, string>> = {
+  education:
+    'Örn: 4 katlı, L şeklinde, yanında kapalı spor salonu ve havuzu olan, tuğla cepheli lise...',
+  religious:
+    'Örn: Merkezi kubbeli, çift minareli, revaklı şadırvan avlusu olan doğal taş cami...',
+  villa:
+    'Örn: 2 katlı, L planlı, güney terasında yüzme havuzu olan, taş ve ahşap cepheli müstakil ev...',
+  residential:
+    'Örn: 5 katlı, geniş güney balkonlu, ortasında ortak bahçe avlusu olan tuğla cepheli konut...',
+  healthcare:
+    'Örn: 2 katlı poliklinik bazası üzerinde 5 katlı yatak bloğu ve şifa avlusu olan hastane...',
+  sports:
+    'Örn: Geniş açıklıklı tonoz kemer çatılı kapalı spor salonu ve yüzme havuzu kompleksi...',
+};
 
 const QUICK_EXAMPLES = [
   { label: 'Ankara Yenimahalle', query: 'Yenimahalle, Ankara' },
@@ -85,6 +131,8 @@ const SEASON_META: Array<{ key: SeasonKey; label: string }> = [
 ];
 
 const ROOF_OPTIONS: Array<{ key: RoofTypeKey; label: string }> = [
+  { key: 'dome', label: 'Merkezi Kubbe + Kasnak Pencereleri (Cami / Anıtsal)' },
+  { key: 'barrel_vault', label: 'Geniş Açıklıklı Tonoz / Kemer Çatı (Spor / Salon)' },
   { key: 'sawtooth', label: 'Testere Dişi Kuzey Işıklığı (Sawtooth)' },
   { key: 'mono_pitch', label: 'Tek Eğimli Güneş Çatısı' },
   { key: 'asymmetric_gable', label: 'Asimetrik İklim Çatısı' },
@@ -95,34 +143,110 @@ const ROOF_OPTIONS: Array<{ key: RoofTypeKey; label: string }> = [
 ];
 
 export const App: React.FC = () => {
-  // Giriş Formu Durumu
+  // Giriş Formu ve Tam Konum Kilidi Durumu
   const [locationText, setLocationText] = useState('');
+  const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [lockedLocation, setLockedLocation] = useState<{
+    lat: number;
+    lng: number;
+    shortTitle: string;
+    displayAddress: string;
+  } | null>(null);
+
   const [showMapSelector, setShowMapSelector] = useState(false);
   const [pickerCoord, setPickerCoord] = useState<{ lat: number; lng: number }>({
     lat: 39.9334,
     lng: 32.8597,
   });
+
+  // Bina Türü, Alanı ve "Nasıl Bir Bina İstiyorsunuz?" Özelleştirme İsteği
   const [funcKey, setFuncKey] = useState<BuildingFunctionKey>('education');
   const [customFuncTitle, setCustomFuncTitle] = useState<string>('');
-  const [targetAreaM2, setTargetAreaM2] = useState<number>(3200);
+  const [targetAreaM2, setTargetAreaM2] = useState<number>(3800);
+  const [userBuildingPrompt, setUserBuildingPrompt] = useState<string>('');
 
   // Canlı Analiz Durumu
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [bundle, setBundle] = useState<VerifiedSiteBundle | null>(null);
 
-  // 3D Simülasyon Durumu (Varsayılan açık)
+  // 3D Simülasyon Durumu
   const [show3DStudio, setShow3DStudio] = useState(true);
   const [season, setSeason] = useState<SeasonKey>('summer');
   const [solarHour, setSolarHour] = useState<number>(13.0);
   const [activeTypologyKey, setActiveTypologyKey] = useState<MassTypologyKey>('u_court');
   const [blocks, setBlocks] = useState<MassBlock[]>([]);
+  const [generatedCourtyardM2, setGeneratedCourtyardM2] = useState<number>(320);
+  const [generatedOrientationDeg, setGeneratedOrientationDeg] = useState<number>(10);
+  const [appliedPromptNotes, setAppliedPromptNotes] = useState<string[]>([]);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [exportTrigger, setExportTrigger] = useState(0);
 
-  const runFullAnalysis = async (customQuery?: string, directCoord?: { lat: number; lng: number }) => {
+  // Canlı Konum Otomatik Tamamlama (Yanlış yan mahalleyi alma sorununu önler)
+  useEffect(() => {
+    const q = locationText.trim();
+    if (
+      q.length < 2 ||
+      /^https?:\/\//i.test(q) ||
+      (lockedLocation && lockedLocation.shortTitle === q)
+    ) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      const list = await searchLocationSuggestions(q);
+      setSuggestions(list);
+    }, 260);
+
+    return () => window.clearTimeout(timer);
+  }, [locationText, lockedLocation]);
+
+  // Bina türü, metrekare veya kullanıcının yazdığı bina özelliği değiştiğinde 3D binayı ANINDA yenile!
+  useEffect(() => {
+    if (!bundle) return;
+    const generated = buildRealisticArchitecturalMassing(
+      funcKey,
+      bundle.cityProfile,
+      targetAreaM2,
+      userBuildingPrompt
+    );
+    setBlocks(generated.blocks);
+    setGeneratedCourtyardM2(generated.courtyardAreaM2);
+    setGeneratedOrientationDeg(generated.orientationDeg);
+    setAppliedPromptNotes(generated.appliedNotes);
+    setSelectedBlockId(generated.blocks[0]?.id ?? null);
+  }, [bundle, funcKey, targetAreaM2, userBuildingPrompt]);
+
+  const handleSelectFunction = (nextKey: BuildingFunctionKey) => {
+    setFuncKey(nextKey);
+    setTargetAreaM2(DEFAULT_AREA_BY_FUNCTION[nextKey] ?? 3000);
+    setUserBuildingPrompt('');
+  };
+
+  const handleMapPinPick = async (lat: number, lng: number) => {
+    const exactLat = Number(lat.toFixed(6));
+    const exactLng = Number(lng.toFixed(6));
+    setPickerCoord({ lat: exactLat, lng: exactLng });
+    const rev = await reverseGeocodeCoordinates(exactLat, exactLng);
+    setLockedLocation({
+      lat: exactLat,
+      lng: exactLng,
+      shortTitle: rev.shortTitle,
+      displayAddress: rev.displayAddress,
+    });
+    setLocationText(rev.shortTitle);
+    setShowSuggestions(false);
+  };
+
+  const runFullAnalysis = async (
+    customQuery?: string,
+    directCoord?: { lat: number; lng: number; shortTitle?: string; displayAddress?: string }
+  ) => {
     setLoading(true);
     setErrorMsg(null);
+    setShowSuggestions(false);
     try {
       let resolved: {
         lat: number;
@@ -132,14 +256,37 @@ export const App: React.FC = () => {
       };
 
       if (directCoord) {
-        resolved = await reverseGeocodeCoordinates(directCoord.lat, directCoord.lng);
+        if (directCoord.shortTitle && directCoord.displayAddress) {
+          resolved = {
+            lat: Number(directCoord.lat.toFixed(6)),
+            lng: Number(directCoord.lng.toFixed(6)),
+            shortTitle: directCoord.shortTitle,
+            displayAddress: directCoord.displayAddress,
+          };
+        } else {
+          resolved = await reverseGeocodeCoordinates(directCoord.lat, directCoord.lng);
+        }
         setLocationText(resolved.shortTitle);
+      } else if (!customQuery && lockedLocation) {
+        // Kullanıcı açılan listeden veya haritadan tam nokta kilitlediyse ASLA yeniden metin araması yapıp kaydırma!
+        resolved = {
+          lat: lockedLocation.lat,
+          lng: lockedLocation.lng,
+          shortTitle: lockedLocation.shortTitle,
+          displayAddress: lockedLocation.displayAddress,
+        };
       } else {
         const q = (customQuery ?? locationText).trim();
         resolved = await resolveLocationInput(q);
       }
 
       setPickerCoord({ lat: resolved.lat, lng: resolved.lng });
+      setLockedLocation({
+        lat: resolved.lat,
+        lng: resolved.lng,
+        shortTitle: resolved.shortTitle,
+        displayAddress: resolved.displayAddress,
+      });
 
       const verified = await fetchVerifiedSiteBundle(
         resolved.lat,
@@ -150,7 +297,6 @@ export const App: React.FC = () => {
 
       setBundle(verified);
 
-      // İlk optimal kütle ve çatı önerisini hazırla
       const recs = generateTypologyRecommendations(
         verified.cityProfile,
         funcKey,
@@ -159,9 +305,20 @@ export const App: React.FC = () => {
       );
       if (recs[0]) {
         setActiveTypologyKey(recs[0].key);
-        setBlocks(recs[0].blocks);
-        setSelectedBlockId(recs[0].blocks[0]?.id ?? null);
       }
+
+      // Seçilen bina türüne (Cami, Lise, Villa, Hastane vb.) ve açıklamaya özel gerçekçi 3D model kur
+      const generated = buildRealisticArchitecturalMassing(
+        funcKey,
+        verified.cityProfile,
+        targetAreaM2,
+        userBuildingPrompt
+      );
+      setBlocks(generated.blocks);
+      setGeneratedCourtyardM2(generated.courtyardAreaM2);
+      setGeneratedOrientationDeg(generated.orientationDeg);
+      setAppliedPromptNotes(generated.appliedNotes);
+      setSelectedBlockId(generated.blocks[0]?.id ?? null);
     } catch (err) {
       setErrorMsg(
         err instanceof Error ? err.message : 'Analiz sırasında beklenmeyen bir hata oluştu.'
@@ -171,7 +328,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // Bina fonksiyonu veya m² değiştiğinde mevcut konuma göre kütle önerisini yenile
+  // İklimsel kütle skorlaması (Bölüm 03 tablosu için)
   const recommendations = useMemo(() => {
     if (!bundle) return [];
     return generateTypologyRecommendations(
@@ -214,7 +371,8 @@ export const App: React.FC = () => {
     const sm = bundle.soilAndMass;
     const tp = bundle.topography;
     const ce = bundle.climateEvidence;
-    const optRoof = recommendOptimalRoofForBlock(topRec.blocks[0], city, funcKey);
+    const refBlock = blocks[0] ?? topRec.blocks[0];
+    const optRoof = recommendOptimalRoofForBlock(refBlock, city, funcKey);
 
     const minTotalTon = Math.round((sm.recommendedUnitMassKgM2.min * targetAreaM2) / 1000);
     const maxTotalTon = Math.round((sm.recommendedUnitMassKgM2.max * targetAreaM2) / 1000);
@@ -222,10 +380,10 @@ export const App: React.FC = () => {
     const md = `# İKLİMFORM — Veriye Dayalı Mimari Arazi, Kütle ve Malzeme Analiz Raporu
 
 ## Konum Bilgisi
-- **İncelenen Konum:** ${bundle.displayAddress}
-- **Koordinatlar:** ${city.lat.toFixed(5)}°K, ${city.lng.toFixed(5)}°D
+- **İncelenen Tam Konum:** ${bundle.displayAddress}
+- **Tam Koordinatlar:** ${city.lat.toFixed(6)}°K, ${city.lng.toFixed(6)}°D
 - **Bina Fonksiyonu & Alanı:** ${BUILDING_PROGRAMS[funcKey].title} — ${targetAreaM2.toLocaleString('tr-TR')} m²
-
+${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildingPrompt.trim()}\n` : ''}
 ## 1. Gerçek Rüzgar ve İklim Verileri (${ce.periodLabel}, ${ce.daysAnalyzed} Günlük Ölçüm)
 - **İklim Sınıfı:** ${city.koppenDesc} (Köppen: ${city.koppen}, TS 825 Isı Yalıtım Bölgesi: ${city.ts825Zone})
 - **Yıllık Hakim Rüzgar Yönleri:** ${ce.annualWindRose
@@ -243,12 +401,12 @@ export const App: React.FC = () => {
 - **Denizden Yükseklik (Rakım):** ${tp.elevationM} m (100m çevrede K:${tp.neighbors100m.northM}m, G:${tp.neighbors100m.southM}m, D:${tp.neighbors100m.eastM}m, B:${tp.neighbors100m.westM}m)
 - **Arazi Eğimi ve Bakısı:** %${tp.slopePct} (${tp.slopeDeg}°) — ${tp.aspectLabel}
 - **Jeolojik Formasyon & Zemin:** ${sm.geologicAgeTr} — ${sm.soilTypeTitle} (Tahmini Ön Sınıf: TBDY 2018 ${sm.estimatedTbdyClass})
-- **100 km Çevrede Deprem Kaydı (1970–2025, M≥4.5):** ${sm.seismicCount100km} deprem (En büyük: M ${sm.maxHistoricalMag})
+- **100 km Çevrede Deprem Kaydı (M≥4.5):** ${sm.seismicCount100km} deprem (En büyük: M ${sm.maxHistoricalMag})
 - **Önerilen Birim Bina Kütlesi:** ${sm.recommendedUnitMassKgM2.min}–${sm.recommendedUnitMassKgM2.max} kg/m² (${targetAreaM2} m² bina için toplam **${minTotalTon}–${maxTotalTon} ton**)
 - **Önerilen Temel ve Taşıyıcı Sistem:** ${sm.recommendedFoundation} / ${sm.recommendedStructure}
 
 ## 3. Optimal Kütle, Avlu ve Çatı Önerisi
-- **Önerilen Kütle Formu:** ${topRec.name} (%${topRec.totalScore} uyum, Avlu: ${topRec.courtyardAreaM2} m²)
+- **Önerilen Kütle Formu:** ${topRec.name} (%${topRec.totalScore} uyum, Avlu: ${generatedCourtyardM2} m²)
 - **Önerilen Çatı Tipi ve Açısı:** ${ROOF_TYPES_META[optRoof.roofType].name} — ${optRoof.roofPitchDeg}° eğim, ${optRoof.overhangSouthM} m güney saçak
 
 ## Veri Kaynakları
@@ -261,17 +419,22 @@ export const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `iklimform_kanitli_rapor_${city.lat.toFixed(2)}_${city.lng.toFixed(2)}.md`;
+    a.download = `iklimform_kanitli_rapor_${city.lat.toFixed(4)}_${city.lng.toFixed(4)}.md`;
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const activePresets = FUNCTION_DESIGN_PRESETS[funcKey] ?? [];
+  const promptPlaceholder =
+    PROMPT_PLACEHOLDER_BY_FUNCTION[funcKey] ??
+    'Örn: 3 katlı, U veya L şeklinde iç avlulu, taş/ahşap/tuğla cepheli, yeşil çatılı bina...';
 
   return (
     <div className="min-h-screen bg-[#F8F8F6] text-[#181816]">
       {/* ÜST BAŞLIK */}
       <header className="bg-white border-b border-stone-200">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <div className="w-9 h-9 bg-[#181816] text-white flex items-center justify-center font-bold text-sm">
               İF
             </div>
@@ -286,7 +449,7 @@ export const App: React.FC = () => {
           {bundle && (
             <button
               onClick={handleDownloadMarkdown}
-              className="px-3.5 py-2 bg-[#181816] hover:bg-stone-800 text-white text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap"
+              className="px-3.5 py-2 bg-[#181816] hover:bg-stone-800 text-white text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap shrink-0"
             >
               <Download className="w-3.5 h-3.5" /> Raporu İndir (.MD)
             </button>
@@ -296,7 +459,7 @@ export const App: React.FC = () => {
 
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-8">
         {/* =================================================================== */}
-        {/* 1. SİTENİN AMACI NEDİR? (HİÇ BİLMEYEN BİRİ İÇİN SADE ANLATIM)        */}
+        {/* 1. SİTENİN AMACI NEDİR?                                             */}
         {/* =================================================================== */}
         <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-5">
           <div className="space-y-2">
@@ -304,59 +467,60 @@ export const App: React.FC = () => {
               Bu Araç Ne İşe Yarar?
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-[#181816] leading-snug">
-              Seçtiğiniz Arsanın Gerçek İklim, Rüzgar, Eğim ve Toprak Verilerine Göre Nasıl Bir
-              Bina Yapılması Gerektiğini Söyler
+              Seçtiğiniz Tam Arsanın Gerçek İklim, Rüzgar, Eğim ve Toprak Verilerine Göre Nasıl Bir
+              Bina Yapılması Gerektiğini Söyler ve 3D Modelini Kurar
             </h1>
             <p className="text-sm sm:text-base text-stone-600 leading-relaxed">
-              Mimarlık öğrencileri ve tasarımcılar bir projeye başlarken arsanın rüzgarının nereden
-              estiğini, güneşin hangi açıyla vurduğunu, arazinin eğimini ve toprağın ne ağırlıkta
-              bir binayı taşıyacağını araştırmak zorundadır. Bu site, girdiğiniz konumun{' '}
-              <strong>gerçek uydu, meteoroloji ve jeoloji verilerini</strong> canlı çekerek
-              tahmine değil <strong>kanıta dayalı</strong> mimari öneriler üretir.
+              Mimarlık öğrencileri ve tasarımcılar arsanın tam konumunu seçtiğinde; rüzgarın nereden
+              estiğini, güneş açısını, arazinin düz mü eğimli mi olduğunu ve toprağın ne ağırlıkta
+              bir binayı taşıyacağını{' '}
+              <strong>gerçek uydu, meteoroloji ve jeoloji verileriyle</strong> kanıtlı olarak
+              hesaplar; seçtiğiniz yapı türüne (Cami, Lise, Hastane, Ev vb.) ve yazdığınız
+              özelliklere uygun gerçekçi 3D mimari kütleyi arazi üzerine yerleştirir.
             </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-stone-100 text-xs sm:text-sm">
             <div className="space-y-1">
-              <span className="font-mono text-xs font-bold text-[#C85A17]">01. KONUM GİRİN</span>
+              <span className="font-mono text-xs font-bold text-[#C85A17]">01. TAM ARSA SEÇİN</span>
               <p className="text-stone-600 leading-relaxed">
-                İl/ilçe adı yazın (ör. <em>Ankara Yenimahalle</em>), Google Maps linki yapıştırın
-                veya haritadan arsanıza tıklayın.
+                Mahalle/sokak yazıp listeden seçin, Google Maps pin linki yapıştırın veya uydu
+                haritasında doğrudan arsanıza tıklayın.
               </p>
             </div>
             <div className="space-y-1">
               <span className="font-mono text-xs font-bold text-[#C85A17]">
-                02. GERÇEK VERİ ÇEKİLİR
+                02. BİNAYI TARİF EDİN
               </span>
               <p className="text-stone-600 leading-relaxed">
-                Son 5 yılın gerçek rüzgar/iklim ölçümü (ERA5), uydu arazi eğimi (Copernicus) ve
-                zemin/deprem kayıtları sorgulanır.
+                Cami, Lise, Hastane, Ev seçin; nasıl bir bina istediğinizi (kat, avlu, spor salonu,
+                kubbe, cephe) seçin veya kendiniz yazın.
               </p>
             </div>
             <div className="space-y-1">
               <span className="font-mono text-xs font-bold text-[#C85A17]">
-                03. MİMARİ REÇETE ÜRETİLİR
+                03. KANITLI REÇETE & 3D
               </span>
               <p className="text-stone-600 leading-relaxed">
-                Kaç kilo kütleli bina olmalı, avlu/kütle nasıl yerleşmeli, çatı kaç derece eğimli
-                olmalı ve hangi malzeme seçilmeli açıklanır.
+                Gerçek rüzgar, 3D arazi/zemin kesiti, bina kütlesi (kg/m²) ve türe özel gerçekçi 3D
+                mimari modeli canlı inceleyin.
               </p>
             </div>
           </div>
         </section>
 
         {/* =================================================================== */}
-        {/* 2. SADE KONUM VE BİNA GİRİŞ KUTUSU                                  */}
+        {/* 2. HASSAS KONUM VE BİNA TASARIM GİRİŞ KUTUSU                         */}
         {/* =================================================================== */}
         <section className="bg-white border border-stone-200 p-6 sm:p-8 space-y-5">
           <h2 className="text-base sm:text-lg font-bold text-[#181816]">
-            Çalışacağınız Arsayı ve Bina Türünü Girin
+            Çalışacağınız Tam Arsayı ve İstediğiniz Binayı Belirleyin
           </h2>
 
-          {/* Konum Satırı */}
+          {/* Konum Satırı + Canlı Nokta Tamamlama */}
           <div className="space-y-2">
             <label className="block text-xs font-bold uppercase tracking-wider text-stone-600">
-              Arsa Konumu (Şehir/İlçe Adı, Koordinat veya Google Maps Linki)
+              1. Tam Arsa Konumu (Mahalle/Sokak Yazıp Seçin, Uydu Haritasından Pinleyin veya Harita Linki Yapıştırın)
             </label>
             <form
               onSubmit={(e) => {
@@ -370,21 +534,91 @@ export const App: React.FC = () => {
                 <input
                   type="text"
                   value={locationText}
-                  onChange={(e) => setLocationText(e.target.value)}
-                  placeholder="Örn: Ankara Yenimahalle  veya  https://www.google.com/maps/@39.96,32.81..."
+                  onFocus={() => setShowSuggestions(true)}
+                  onChange={(e) => {
+                    setLocationText(e.target.value);
+                    setLockedLocation(null);
+                    setShowSuggestions(true);
+                  }}
+                  placeholder="Örn: Ragıp Tüzün Yenimahalle, Moda Kadıköy veya Google Maps Pin Linki..."
                   className="w-full pl-10 pr-3.5 py-3 bg-[#FAF9F6] border border-stone-300 text-sm focus:outline-none focus:bg-white focus:border-[#181816]"
                 />
+
+                {/* Canlı Tam Konum Önerileri (Yanlış Yeri Seçmeyi Önler) */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border-2 border-[#181816] shadow-lg z-30 max-h-64 overflow-y-auto divide-y divide-stone-100">
+                    {suggestions.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setLocationText(item.shortTitle);
+                          setPickerCoord({ lat: item.lat, lng: item.lng });
+                          setLockedLocation({
+                            lat: item.lat,
+                            lng: item.lng,
+                            shortTitle: item.shortTitle,
+                            displayAddress: item.displayAddress,
+                          });
+                          setSuggestions([]);
+                          setShowSuggestions(false);
+                        }}
+                        className="w-full text-left px-3.5 py-2.5 hover:bg-[#FAF9F5] transition flex items-start justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-[#181816] truncate">
+                            {item.shortTitle}
+                          </div>
+                          <div className="text-[11px] text-stone-500 truncate">
+                            {item.displayAddress}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 bg-stone-100 border border-stone-200 text-stone-700 block">
+                            {item.categoryLabel}
+                          </span>
+                          <span className="font-mono text-[10px] text-stone-500">
+                            {item.lat.toFixed(4)}°, {item.lng.toFixed(4)}°
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <button
                 type="button"
                 onClick={() => setShowMapSelector((v) => !v)}
-                className="px-4 py-3 border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                className="px-4 py-3 border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
               >
                 <MapPin className="w-4 h-4 text-[#C85A17]" />
-                {showMapSelector ? 'Haritayı Kapat' : 'Haritadan Seç'}
+                {showMapSelector ? 'Uydu Haritasını Kapat' : 'Uydu Haritasından Tam Arsa Seç'}
               </button>
             </form>
+
+            {/* Kilitlenen Tam Koordinat Teyit Satırı */}
+            {lockedLocation && (
+              <div className="bg-[#F2FBF5] border border-[#BBF7D0] px-3 py-2 text-xs text-[#166534] flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    <strong>Tam Konum Kilitlendi:</strong> {lockedLocation.shortTitle} (
+                    <span className="font-mono">
+                      {lockedLocation.lat.toFixed(5)}°K, {lockedLocation.lng.toFixed(5)}°D
+                    </span>
+                    )
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowMapSelector(true)}
+                  className="underline font-semibold whitespace-nowrap"
+                >
+                  Uydu Görünümünde İncele / Pini Kaydır
+                </button>
+              </div>
+            )}
 
             {/* Hızlı Örnek Konumlar */}
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
@@ -394,6 +628,7 @@ export const App: React.FC = () => {
                   key={ex.label}
                   type="button"
                   onClick={() => {
+                    setLockedLocation(null);
                     setLocationText(ex.query);
                     runFullAnalysis(ex.query);
                   }}
@@ -405,39 +640,41 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* İnteraktif Harita Seçici (Açıldığında) */}
+          {/* İnteraktif Uydu & Sokak Harita Seçici */}
           {showMapSelector && (
             <div className="space-y-2 pt-1">
               <SiteMapPicker
                 lat={pickerCoord.lat}
                 lng={pickerCoord.lng}
-                onPickCoordinate={(lat, lng) => {
-                  setPickerCoord({ lat, lng });
-                }}
+                defaultLayer="satellite"
+                onPickCoordinate={handleMapPinPick}
               />
               <button
                 type="button"
                 onClick={() => {
                   setShowMapSelector(false);
-                  runFullAnalysis(undefined, pickerCoord);
+                  runFullAnalysis(
+                    undefined,
+                    lockedLocation ?? { lat: pickerCoord.lat, lng: pickerCoord.lng }
+                  );
                 }}
                 className="w-full py-2.5 bg-stone-800 hover:bg-black text-white text-xs font-semibold transition"
               >
-                Haritada Seçilen Noktayı ({pickerCoord.lat.toFixed(4)}°K,{' '}
-                {pickerCoord.lng.toFixed(4)}°D) Analiz Et
+                Seçilen Tam Parsel Noktasını ({pickerCoord.lat.toFixed(5)}°K,{' '}
+                {pickerCoord.lng.toFixed(5)}°D) Analiz Et
               </button>
             </div>
           )}
 
           {/* Bina Fonksiyonu ve Metrekare */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-stone-100">
             <div className="space-y-2">
               <label className="block text-xs font-bold uppercase tracking-wider text-stone-600 mb-1.5">
-                Yapılacak Binanın Fonksiyonu (20+ Yapı Türü veya Özel Giriş)
+                2. Yapılacak Binanın Türü (Her Tür İçin Özel Gerçekçi 3D Mimari)
               </label>
               <select
                 value={funcKey}
-                onChange={(e) => setFuncKey(e.target.value as BuildingFunctionKey)}
+                onChange={(e) => handleSelectFunction(e.target.value as BuildingFunctionKey)}
                 className="w-full bg-[#FAF9F6] border border-stone-300 px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:border-[#181816]"
               >
                 {BUILDING_FUNCTION_GROUPS.map((grp) => (
@@ -456,7 +693,7 @@ export const App: React.FC = () => {
                   type="text"
                   value={customFuncTitle}
                   onChange={(e) => setCustomFuncTitle(e.target.value)}
-                  placeholder="Proje konunuzu yazın (Örn: Arkeopark Ziyaretçi Merkezi, İtfaiye Binası, Gözlemevi)..."
+                  placeholder="Proje konunuzu yazın (Örn: Arkeopark Ziyaretçi Merkezi, İtfaiye Binası)..."
                   className="w-full bg-white border border-stone-400 px-3.5 py-2 text-sm focus:outline-none focus:border-[#181816]"
                 />
               )}
@@ -472,26 +709,83 @@ export const App: React.FC = () => {
               <div className="flex items-center gap-3">
                 <input
                   type="range"
-                  min={600}
+                  min={180}
                   max={15000}
-                  step={200}
+                  step={50}
                   value={targetAreaM2}
                   onChange={(e) => setTargetAreaM2(Number(e.target.value))}
                   className="flex-1"
                 />
                 <input
                   type="number"
-                  min={200}
+                  min={120}
                   max={50000}
-                  step={100}
+                  step={50}
                   value={targetAreaM2}
                   onChange={(e) =>
-                    setTargetAreaM2(Math.max(200, Number(e.target.value) || 1000))
+                    setTargetAreaM2(Math.max(120, Number(e.target.value) || 1000))
                   }
                   className="w-24 bg-[#FAF9F6] border border-stone-300 px-2.5 py-2 text-sm font-semibold text-right"
                 />
               </div>
+              <p className="text-[11px] text-stone-500 mt-1">
+                Seçilen yapı türüne göre ortalama ölçek otomatik ayarlanır; dilediğiniz gibi
+                değiştirebilirsiniz.
+              </p>
             </div>
+          </div>
+
+          {/* 3. NASIL BİR BİNA İSTİYORSUNUZ? (HAZIR TİPLER + SERBEST YAZIM KUTUSU) */}
+          <div className="bg-[#FAF9F6] border border-stone-300 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-[#181816] flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-[#C85A17]" />
+                3. Nasıl Bir {BUILDING_PROGRAMS[funcKey].title} İstiyorsunuz? (Seçin veya Kendi Özelliklerinizi Yazın)
+              </label>
+              {userBuildingPrompt.trim() !== '' && (
+                <button
+                  type="button"
+                  onClick={() => setUserBuildingPrompt('')}
+                  className="text-[11px] text-stone-500 hover:text-stone-800 underline"
+                >
+                  Varsayılan Öneriye Dön
+                </button>
+              )}
+            </div>
+
+            {activePresets.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {activePresets.map((preset) => {
+                  const isActive = userBuildingPrompt.trim() === preset.promptText.trim();
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => setUserBuildingPrompt(preset.promptText)}
+                      className={`px-2.5 py-1.5 text-xs font-semibold border transition ${
+                        isActive
+                          ? 'bg-[#181816] text-white border-[#181816]'
+                          : 'bg-white text-stone-700 border-stone-300 hover:border-[#181816]'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <input
+              type="text"
+              value={userBuildingPrompt}
+              onChange={(e) => setUserBuildingPrompt(e.target.value)}
+              placeholder={promptPlaceholder}
+              className="w-full bg-white border border-stone-300 px-3.5 py-2.5 text-xs sm:text-sm focus:outline-none focus:border-[#181816]"
+            />
+
+            <p className="text-[11px] text-stone-600 leading-relaxed">
+              Kat sayısını (ör. <em>2 katlı, 4 katlı</em>), plan şemasını (<em>U planlı, L şeklinde, iç avlulu, kompakt</em>), ek mekanları (<em>kapalı spor salonu, konferans salonu, havuz, çift minare</em>) ve dış cepheyi (<em>taş, tuğla, ahşap, beyaz, cam, kiremit/yeşil çatı</em>) yazdığınızda 3D bina anında o özelliklere göre kurulur.
+            </p>
           </div>
 
           {errorMsg && (
@@ -510,16 +804,16 @@ export const App: React.FC = () => {
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Uydu, Meteoroloji (ERA5) ve Zemin Verileri Sorgulanıyor...
+                Tam Arsa Koordinatı İçin Uydu, ERA5 İklim ve Zemin Verileri Sorgulanıyor...
               </>
             ) : (
-              'Gerçek Verilerle Araziyi Analiz Et ve Mimari Önerileri Göster'
+              'Gerçek Verilerle Araziyi Analiz Et ve 3D Binayı Yerleştir'
             )}
           </button>
         </section>
 
         {/* =================================================================== */}
-        {/* ANALİZ SONUÇLARI: YALNIZCA KONUM SEÇİLDİĞİNDE SADE VE KANITLI AÇILIR */}
+        {/* ANALİZ SONUÇLARI                                                    */}
         {/* =================================================================== */}
         {bundle && recommendations.length > 0 && assemblySummary && (
           <ReportSections
@@ -527,14 +821,26 @@ export const App: React.FC = () => {
             funcKey={funcKey}
             customFuncTitle={customFuncTitle}
             targetAreaM2={targetAreaM2}
+            userBuildingPrompt={userBuildingPrompt}
+            setUserBuildingPrompt={setUserBuildingPrompt}
+            appliedPromptNotes={appliedPromptNotes}
+            generatedCourtyardM2={generatedCourtyardM2}
+            generatedOrientationDeg={generatedOrientationDeg}
+            onRelocateExactPin={(lat, lng) => {
+              runFullAnalysis(undefined, { lat, lng });
+            }}
             recommendations={recommendations}
             activeTypologyKey={activeTypologyKey}
             onSelectTypology={(key) => {
-              const found = recommendations.find((r) => r.key === key);
-              if (found) {
-                setActiveTypologyKey(found.key);
-                setBlocks(found.blocks.map((b) => ({ ...b })));
-                setSelectedBlockId(found.blocks[0]?.id ?? null);
+              setActiveTypologyKey(key);
+              if (key === 'l_shield') {
+                setUserBuildingPrompt('L şeklinde rüzgar korunaklı avlulu yerleşim');
+              } else if (key === 'courtyard') {
+                setUserBuildingPrompt('Merkezi iç avlulu 4 kanatlı yerleşim');
+              } else if (key === 'compact_prism') {
+                setUserBuildingPrompt('Kompakt tek blok yerleşim');
+              } else {
+                setUserBuildingPrompt('');
               }
             }}
             blocks={blocks}
@@ -560,13 +866,19 @@ export const App: React.FC = () => {
 };
 
 /* ============================================================================
- * ALT BİLEŞEN: DOĞRULANMIŞ MİMARİ ANALİZ RAPORU (SADE, AKICI VE KANITLI)
+ * ALT BİLEŞEN: DOĞRULANMIŞ MİMARİ ANALİZ RAPORU VE GERÇEKÇİ 3D STÜDYO
  * ========================================================================== */
 interface ReportSectionsProps {
   bundle: VerifiedSiteBundle;
   funcKey: BuildingFunctionKey;
   customFuncTitle: string;
   targetAreaM2: number;
+  userBuildingPrompt: string;
+  setUserBuildingPrompt: (v: string) => void;
+  appliedPromptNotes: string[];
+  generatedCourtyardM2: number;
+  generatedOrientationDeg: number;
+  onRelocateExactPin: (lat: number, lng: number) => void;
   recommendations: ReturnType<typeof generateTypologyRecommendations>;
   activeTypologyKey: MassTypologyKey;
   onSelectTypology: (k: MassTypologyKey) => void;
@@ -592,6 +904,12 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   funcKey,
   customFuncTitle,
   targetAreaM2,
+  userBuildingPrompt,
+  setUserBuildingPrompt,
+  appliedPromptNotes,
+  generatedCourtyardM2,
+  generatedOrientationDeg,
+  onRelocateExactPin,
   recommendations,
   activeTypologyKey,
   onSelectTypology,
@@ -618,6 +936,13 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   const prog = BUILDING_PROGRAMS[funcKey];
   const displayProgTitle =
     funcKey === 'custom' && customFuncTitle.trim() ? customFuncTitle.trim() : prog.title;
+
+  // Özet haritasında kullanıcı pini yan parsele kaydırırsa tek tıkla güncelleme durumu
+  const [adjustedPin, setAdjustedPin] = useState<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
+    setAdjustedPin(null);
+  }, [city.lat, city.lng]);
 
   // Parselde güncel saha/plankote veya sondajlı zemin etüdü varsa üzerine yazma (override) desteği
   const [showFieldOverride, setShowFieldOverride] = useState(false);
@@ -677,23 +1002,25 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
     evaluatedMaterials.find((e) => e.material.id === recommendedMaterialsMap.roof_finish)
       ?.material.colorHex ?? '#334155';
 
+  const activePresets = FUNCTION_DESIGN_PRESETS[funcKey] ?? [];
+
   return (
     <div className="space-y-8">
       {/* ===================================================================== */}
-      {/* YÖNETİCİ ÖZETİ + DOĞRULANMIŞ HARİTA NOKTASI                            */}
+      {/* YÖNETİCİ ÖZETİ + DOĞRULANMIŞ UYDU PARSEL HARİTASI                      */}
       {/* ===================================================================== */}
       <section className="bg-white border-2 border-[#181816] p-6 sm:p-8 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-stone-200 pb-4">
           <div>
             <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#15803D]">
-              <ShieldCheck className="w-4 h-4" /> Gerçek Verilerle Doğrulanmış Arazi Özeti
+              <ShieldCheck className="w-4 h-4" /> Gerçek Verilerle Doğrulanmış Tam Arsa Özeti
             </div>
             <h2 className="text-xl font-bold text-[#181816] mt-1">{bundle.shortTitle}</h2>
             <p className="text-xs text-stone-500 mt-0.5">{bundle.displayAddress}</p>
           </div>
           <div className="font-mono text-xs bg-[#F8F8F6] border border-stone-200 px-3 py-2 shrink-0">
-            <div>Enlem: {city.lat.toFixed(4)}°K</div>
-            <div>Boylam: {city.lng.toFixed(4)}°D</div>
+            <div>Enlem: {city.lat.toFixed(5)}°K</div>
+            <div>Boylam: {city.lng.toFixed(5)}°D</div>
             <div>Rakım: {tp.elevationM} m</div>
           </div>
         </div>
@@ -701,7 +1028,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
         {/* Sade Dil Özeti: Bu Arsada Ne Yapılmalı? */}
         <div className="bg-[#FAF9F5] border border-stone-200 p-4 sm:p-5 space-y-2.5 text-sm leading-relaxed text-stone-800">
           <div className="font-bold text-[#181816]">
-            Kısaca Bu Arsaya Nasıl Bir Bina Yapılmalı?
+            Kısaca Bu Arsaya Nasıl Bir {displayProgTitle} Yapılmalı?
           </div>
           <p>
             <strong>1. Rüzgar ve Yönelim:</strong> Son 5 yılın gerçek ölçümlerine göre bu noktada
@@ -713,8 +1040,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             <strong>
               {ce.seasonalWindTop.winter[0]?.name} (%{ce.seasonalWindTop.winter[0]?.frequencyPct})
             </strong>{' '}
-            yönünden esmektedir. Yaşam odaları güneye, servis alanları soğuk rüzgar yönüne
-            yerleştirilmelidir.
+            yönünden esmektedir. Ana mekanlar güneye/avlu içine, servis hacimleri soğuk rüzgar
+            yönüne yerleştirilmelidir.
           </p>
           <p>
             <strong>2. Arazi Düz mü Eğimli mi & Bina Ağırlığı:</strong> Uydu kot analizine göre bu
@@ -732,17 +1059,362 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             ) tutulmalı ve <strong>{effectiveMassCalc.recommendedFoundation}</strong> uygulanmalıdır.
           </p>
           <p>
-            <strong>3. Kütle, Avlu ve Çatı:</strong> <strong>{displayProgTitle}</strong> için en
-            uygun yerleşim <strong>{activeRec.name}</strong> ({activeRec.courtyardAreaM2} m² avlu)
-            ve çatıda{' '}
+            <strong>3. Mimari Kütle, Avlu ve Çatı:</strong> <strong>{displayProgTitle}</strong> için
+            oluşturulan mimari yerleşim ({generatedCourtyardM2} m² açık/avlu alanı,{' '}
+            <strong>{currentBlocks.length} özel mimari kütle</strong>) ve ana çatıda{' '}
             <strong>
-              {optRoof.roofPitchDeg}° eğimli {ROOF_TYPES_META[optRoof.roofType].shortName}
+              {ROOF_TYPES_META[activeBlock.roofType].shortName} ({activeBlock.roofPitchDeg}°)
             </strong>{' '}
-            ile <strong>{optRoof.overhangSouthM} m</strong> güney saçağıdır.
+            ile iklim ve fonksiyon dengelenmiştir.
           </p>
         </div>
 
-        <SiteMapPicker lat={city.lat} lng={city.lng} interactivePick={false} heightClass="h-52" />
+        {/* Doğrulanmış Uydu Haritası: Kullanıcı isterse buradan da tam parselini tıklayıp kaydırabilir */}
+        <div className="space-y-2">
+          <SiteMapPicker
+            lat={adjustedPin ? adjustedPin.lat : city.lat}
+            lng={adjustedPin ? adjustedPin.lng : city.lng}
+            interactivePick={true}
+            defaultLayer="satellite"
+            heightClass="h-64"
+            onPickCoordinate={(lat, lng) => setAdjustedPin({ lat, lng })}
+          />
+          {adjustedPin && (
+            <div className="bg-amber-50 border border-amber-300 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="text-amber-950 font-medium">
+                Haritada yeni bir tam arsa noktası seçtiniz (
+                <strong className="font-mono">
+                  {adjustedPin.lat.toFixed(5)}°K, {adjustedPin.lng.toFixed(5)}°D
+                </strong>
+                ).
+              </span>
+              <button
+                type="button"
+                onClick={() => onRelocateExactPin(adjustedPin.lat, adjustedPin.lng)}
+                className="px-3 py-1.5 bg-[#181816] hover:bg-stone-800 text-white font-bold transition whitespace-nowrap"
+              >
+                Bu Tam Noktaya Göre Analizi Yenile
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ===================================================================== */}
+      {/* BÖLÜM 5'İ ÜSTE YAKINLAŞTIRILMIŞ GERÇEKÇİ 3D BİNA VE ÖZELLEŞTİRME      */}
+      {/* ===================================================================== */}
+      <section className="bg-white border border-stone-200">
+        <button
+          type="button"
+          onClick={() => setShow3DStudio(!show3DStudio)}
+          className="w-full px-6 py-5 flex items-center justify-between text-left hover:bg-stone-50 transition"
+        >
+          <div>
+            <span className="font-mono text-xs font-bold text-[#C85A17]">
+              GERÇEKÇİ 3D MİMARİ MODEL · {displayProgTitle.toUpperCase()}
+            </span>
+            <h3 className="text-base sm:text-lg font-bold text-[#181816] mt-0.5">
+              {displayProgTitle} 3D Yerleşimi, Bina Özelliklerini Yazarak Değiştirme ve Güneş Testi
+            </h3>
+          </div>
+          {show3DStudio ? (
+            <ChevronUp className="w-5 h-5 shrink-0" />
+          ) : (
+            <ChevronDown className="w-5 h-5 shrink-0" />
+          )}
+        </button>
+
+        {show3DStudio && (
+          <div className="p-6 pt-3 border-t border-stone-200 space-y-5">
+            {/* Canlı Bina Özelleştirme Çubuğu (3D Ekranın Hemen Üstünde!) */}
+            <div className="bg-[#FAF9F6] border border-stone-300 p-3.5 space-y-2.5 text-xs">
+              <div className="font-bold text-[#181816] flex items-center justify-between gap-2">
+                <span>
+                  Nasıl Bir {displayProgTitle} İstiyorsunuz? (Aşağıdan Seçin veya Yazın — 3D Model
+                  Anında Değişir)
+                </span>
+                {userBuildingPrompt.trim() !== '' && (
+                  <button
+                    type="button"
+                    onClick={() => setUserBuildingPrompt('')}
+                    className="text-stone-500 underline font-normal"
+                  >
+                    Sıfırla
+                  </button>
+                )}
+              </div>
+
+              {activePresets.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {activePresets.map((preset) => {
+                    const isActive = userBuildingPrompt.trim() === preset.promptText.trim();
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setUserBuildingPrompt(preset.promptText)}
+                        className={`px-2.5 py-1 font-semibold border transition ${
+                          isActive
+                            ? 'bg-[#181816] text-white border-[#181816]'
+                            : 'bg-white text-stone-700 border-stone-300 hover:border-[#181816]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <input
+                type="text"
+                value={userBuildingPrompt}
+                onChange={(e) => setUserBuildingPrompt(e.target.value)}
+                placeholder={
+                  PROMPT_PLACEHOLDER_BY_FUNCTION[funcKey] ??
+                  'Örn: 4 katlı, L şeklinde, spor salonlu, taş veya tuğla cepheli bina...'
+                }
+                className="w-full bg-white border border-stone-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-[#181816]"
+              />
+
+              {appliedPromptNotes.length > 0 && (
+                <div className="text-[11px] text-[#15803D] font-medium flex flex-wrap gap-x-3 gap-y-1">
+                  {appliedPromptNotes.map((note, idx) => (
+                    <span key={idx}>✓ {note}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Mevsim, Saat ve Dışa Aktarma Kontrolleri */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#FAF9F6] border border-stone-200 p-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                {SEASON_META.map((s) => (
+                  <button
+                    key={s.key}
+                    onClick={() => setSeason(s.key)}
+                    className={`px-3 py-1.5 font-semibold border ${
+                      season === s.key
+                        ? 'bg-[#181816] text-white border-[#181816]'
+                        : 'bg-white text-stone-700 border-stone-300'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+                <div className="flex items-center gap-2 pl-2">
+                  <span>Saat:</span>
+                  <input
+                    type="range"
+                    min={6}
+                    max={19}
+                    step={0.25}
+                    value={solarHour}
+                    onChange={(e) => setSolarHour(Number(e.target.value))}
+                    className="w-28"
+                  />
+                  <strong className="font-mono">{Math.floor(solarHour)}:00</strong>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const nextBlk: MassBlock = {
+                      ...activeBlock,
+                      id: `ek_${Date.now().toString().slice(-4)}`,
+                      label: `Ek Kütle #${currentBlocks.length + 1}`,
+                      x: 0,
+                      z: 0,
+                      specialFeature: undefined,
+                    };
+                    setBlocks([...currentBlocks, nextBlk]);
+                    setSelectedBlockId(nextBlk.id);
+                  }}
+                  className="px-3 py-1.5 bg-[#181816] text-white font-semibold flex items-center gap-1 whitespace-nowrap"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Ek Kütle Ekle
+                </button>
+                <button
+                  onClick={() => setExportTrigger((n) => n + 1)}
+                  className="px-3 py-1.5 bg-white border border-stone-300 font-semibold flex items-center gap-1 whitespace-nowrap"
+                >
+                  <Box className="w-3.5 h-3.5 text-[#C85A17]" /> 3D .OBJ İndir
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+              <div className="lg:col-span-8">
+                <Viewport3D
+                  city={city}
+                  season={season}
+                  dayOfYear={SEASON_REPRESENTATIVE_DOY[season].doy}
+                  solarHour={solarHour}
+                  onChangeSolarHour={setSolarHour}
+                  site={DEFAULT_SITE}
+                  blocks={currentBlocks}
+                  neighbors={EMPTY_NEIGHBORS}
+                  selectedBlockId={activeBlock.id}
+                  onSelectBlock={(id) => {
+                    if (id) setSelectedBlockId(id);
+                  }}
+                  globalOrientationDeg={generatedOrientationDeg}
+                  courtyardAreaM2={generatedCourtyardM2}
+                  activeMaterialWallColor={activeWallColor}
+                  activeMaterialRoofColor={activeRoofColor}
+                  exportTrigger={exportTrigger}
+                  terrainGrid3x3M={tp.grid3x3M}
+                  nativeSlopePct={tp.slopePct}
+                  effectiveSlopePct={effectiveSlopePct}
+                  soilClass={effectiveSoilClass}
+                />
+              </div>
+
+              <div className="lg:col-span-4 bg-[#FAF9F6] border border-stone-200 p-4 space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <strong className="text-sm text-[#181816]">Seçili Bölüm & Çatı Ayarı</strong>
+                  {currentBlocks.length > 1 && (
+                    <button
+                      onClick={() => {
+                        const rem = currentBlocks.filter((b) => b.id !== activeBlock.id);
+                        setBlocks(rem);
+                        setSelectedBlockId(rem[0]?.id ?? null);
+                      }}
+                      className="text-red-600 flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Sil
+                    </button>
+                  )}
+                </div>
+
+                <select
+                  value={activeBlock.id}
+                  onChange={(e) => setSelectedBlockId(e.target.value)}
+                  className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
+                >
+                  {currentBlocks.map((b, i) => (
+                    <option key={b.id} value={b.id}>
+                      {i + 1}. {b.label} ({Math.round(b.floors * b.floorHeight)}m yükseklik)
+                    </option>
+                  ))}
+                </select>
+
+                <div>
+                  <label className="block text-stone-600 mb-1">Çatı / Üst Örtü Tipi</label>
+                  <select
+                    value={activeBlock.roofType}
+                    onChange={(e) => {
+                      const rt = e.target.value as RoofTypeKey;
+                      setBlocks(
+                        currentBlocks.map((b) =>
+                          b.id === activeBlock.id ? { ...b, roofType: rt } : b
+                        )
+                      );
+                    }}
+                    className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
+                  >
+                    {ROOF_OPTIONS.map((ro) => (
+                      <option key={ro.key} value={ro.key}>
+                        {ro.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="flex justify-between mb-1">
+                    <span>Çatı / Kubbe Yüksekliği & Açısı</span>
+                    <strong>{activeBlock.roofPitchDeg}°</strong>
+                  </label>
+                  <input
+                    type="range"
+                    min={5}
+                    max={45}
+                    value={activeBlock.roofPitchDeg}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setBlocks(
+                        currentBlocks.map((b) =>
+                          b.id === activeBlock.id ? { ...b, roofPitchDeg: v } : b
+                        )
+                      );
+                    }}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <label className="flex justify-between mb-1">
+                    <span>Güney Saçak Uzantısı</span>
+                    <strong>{activeBlock.overhangSouthM} m</strong>
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={2.5}
+                    step={0.1}
+                    value={activeBlock.overhangSouthM}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setBlocks(
+                        currentBlocks.map((b) =>
+                          b.id === activeBlock.id ? { ...b, overhangSouthM: v } : b
+                        )
+                      );
+                    }}
+                    className="w-full"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div>
+                    <label className="flex justify-between mb-1">
+                      <span>Kat Adedi</span>
+                      <strong>{activeBlock.floors}</strong>
+                    </label>
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      value={activeBlock.floors}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setBlocks(
+                          currentBlocks.map((b) =>
+                            b.id === activeBlock.id ? { ...b, floors: v } : b
+                          )
+                        );
+                      }}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex justify-between mb-1">
+                      <span>Konum X</span>
+                      <strong>{activeBlock.x}m</strong>
+                    </label>
+                    <input
+                      type="range"
+                      min={-35}
+                      max={35}
+                      value={activeBlock.x}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setBlocks(
+                          currentBlocks.map((b) =>
+                            b.id === activeBlock.id ? { ...b, x: v } : b
+                          )
+                        );
+                      }}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ===================================================================== */}
@@ -759,7 +1431,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </p>
         </div>
 
-        {/* Şu Anki Anlık Canlı Hava, Rüzgar ve Toprak Nemi Durumu */}
         {ce.liveNow && (
           <div className="bg-[#FAF9F5] border border-stone-300 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div>
@@ -783,7 +1454,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         )}
 
-        {/* Gerçek 8 Yönlü Yıllık Rüzgar Dağılımı */}
         <div className="space-y-3">
           <div className="text-sm font-bold text-[#181816] flex items-center gap-2">
             <Wind className="w-4 h-4 text-sky-700" />
@@ -811,7 +1481,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        {/* 4 Mevsim Tablosu */}
         <div className="overflow-x-auto border border-stone-200">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead className="bg-[#FAF9F6] border-b border-stone-200 text-xs text-stone-600">
@@ -851,7 +1520,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </table>
         </div>
 
-        {/* Güneş Açısı ve Gölge Özeti */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-[#FAF9F6] border border-stone-200 p-4 text-xs">
           <div>
             <span className="text-stone-500 block">Yaz Öğle Güneşi (21 Haziran)</span>
@@ -903,7 +1571,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </p>
         </div>
 
-        {/* Gerçek 3D Arazi Eğimi ve Yeraltı Toprak Katmanı Kesit Modeli */}
         <TerrainSoil3DBlock
           topography={tp}
           effectiveSlopePct={effectiveSlopePct}
@@ -913,7 +1580,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
         />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs sm:text-sm">
-          {/* Topoğrafya Kutusu */}
           <div className="bg-[#FAF9F6] border border-stone-200 p-4 space-y-2.5">
             <div className="font-bold text-[#181816] flex items-center gap-2">
               <Mountain className="w-4 h-4 text-[#C85A17]" />
@@ -942,7 +1608,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             </p>
           </div>
 
-          {/* Zemin & Deprem Kutusu */}
           <div className="bg-[#FAF9F6] border border-stone-200 p-4 space-y-2.5">
             <div className="font-bold text-[#181816] flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#181816]" />
@@ -981,7 +1646,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        {/* İsteğe Bağlı: Parsel Sondaj Raporu / Halihazır Plankote Manuel Güncelleme */}
         <div className="border border-stone-200 bg-white">
           <button
             type="button"
@@ -1041,7 +1705,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           )}
         </div>
 
-        {/* Bina Kütlesi (kg/m² ve Toplam Ton) ve Temel Önerisi */}
         <div className="bg-[#FAF9F5] border-l-4 border-[#181816] p-4 sm:p-5 space-y-3 text-xs sm:text-sm">
           <div className="font-bold text-[#181816]">
             Toprak ve Deprem Verisine Göre Önerilen Bina Kütlesi (Ağırlığı) ve Temel Sistemi
@@ -1097,20 +1760,19 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             BÖLÜM 03 · KÜTLE, AVLU VE MEKAN DAĞILIMI
           </span>
           <h3 className="text-lg font-bold text-[#181816] mt-0.5">
-            {displayProgTitle} ({targetAreaM2.toLocaleString('tr-TR')} m²) İçin En Uygun Kütle ve
-            Avlu Yerleşimi
+            {displayProgTitle} ({targetAreaM2.toLocaleString('tr-TR')} m²) İçin İklimsel Avlu ve
+            Mekan Programı
           </h3>
         </div>
 
         <div className="bg-[#FAF9F6] border border-stone-300 p-5 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <span className="text-xs font-bold text-[#15803D]">EN YÜKSEK UYUMLU KÜTLE ŞEKLİ</span>
+              <span className="text-xs font-bold text-[#15803D]">İKLİMSEL YERLEŞİM PRENSİBİ</span>
               <h4 className="text-lg font-bold text-[#181816]">{activeRec.name}</h4>
             </div>
             <div className="text-sm font-bold text-[#181816]">
-              Uyum Skoru: %{activeRec.totalScore} · Avlu: {activeRec.courtyardAreaM2} m² (
-              {activeRec.courtyardRatioHW})
+              İklim Uyum Skoru: %{activeRec.totalScore} · Avlu/Açık Alan: {generatedCourtyardM2} m²
             </div>
           </div>
 
@@ -1137,7 +1799,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        {/* Mekanların Metrekare ve Cephe Yönelimi */}
         <div className="overflow-x-auto border border-stone-200">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead className="bg-[#FAF9F6] border-b border-stone-200 text-xs text-stone-600">
@@ -1175,7 +1836,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             BÖLÜM 04 · ÇATI AÇISI VE YEREL MALZEME SEÇİMİ
           </span>
           <h3 className="text-lg font-bold text-[#181816] mt-0.5">
-            Güneş Açısına Göre Çatı Eğimi ve Lokasyona Yakın Sürdürülebilir Malzemeler
+            Üst Örtü / Çatı Tasarımı ve Lokasyona Yakın Sürdürülebilir Malzemeler
           </h3>
           <p className="text-xs text-stone-500 mt-1">
             Kaynak: TS 825 Binalarda Isı Yalıtım Kuralları (Bölge {city.ts825Zone} Sınır U ≤{' '}
@@ -1183,16 +1844,15 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </p>
         </div>
 
-        {/* Çatı Önerisi Özeti */}
         <div className="bg-[#FAF9F6] border border-stone-200 p-4 space-y-1.5 text-xs sm:text-sm">
           <div className="font-bold text-[#181816] flex items-center gap-2">
             <Compass className="w-4 h-4 text-[#C85A17]" />
-            Önerilen Çatı Tasarımı: {ROOF_TYPES_META[optRoof.roofType].name}
+            Önerilen Üst Örtü / Çatı Tasarımı: {ROOF_TYPES_META[optRoof.roofType].name}
           </div>
           <p className="text-stone-700 leading-relaxed">{optRoof.reasoning}</p>
           <div className="flex flex-wrap gap-4 pt-1 font-mono text-xs text-stone-700">
             <span>
-              Önerilen Çatı Eğimi: <strong>{optRoof.roofPitchDeg}°</strong>
+              Önerilen Çatı Açısı: <strong>{optRoof.roofPitchDeg}°</strong>
             </span>
             <span>
               Güney Saçak Uzantısı: <strong>{optRoof.overhangSouthM} m</strong>
@@ -1203,7 +1863,6 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        {/* Yerel Malzeme Tablosu */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
           {(Object.keys(MATERIAL_CATEGORY_LABELS) as MaterialCategoryKey[]).map((cat) => {
             const ev = evaluatedMaterials.find(
@@ -1234,273 +1893,17 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       </section>
 
       {/* ===================================================================== */}
-      {/* BÖLÜM 5: İSTEĞE BAĞLI 3D KÜTLE VE ÇATI SİMÜLASYONU EKLENTİSİ           */}
-      {/* ===================================================================== */}
-      <section className="bg-white border border-stone-200">
-        <button
-          type="button"
-          onClick={() => setShow3DStudio(!show3DStudio)}
-          className="w-full px-6 py-5 flex items-center justify-between text-left hover:bg-stone-50 transition"
-        >
-          <div>
-            <span className="font-mono text-xs font-bold text-[#C85A17]">
-              EKLENTİ · ETKİLEŞİMLİ 3D GÖRÜNÜM
-            </span>
-            <h3 className="text-base sm:text-lg font-bold text-[#181816] mt-0.5">
-              3D Bina Kütlesi Ekle, Çatı Açısını ve Güneş Gölgelerini Canlı Test Et
-            </h3>
-          </div>
-          {show3DStudio ? (
-            <ChevronUp className="w-5 h-5 shrink-0" />
-          ) : (
-            <ChevronDown className="w-5 h-5 shrink-0" />
-          )}
-        </button>
-
-        {show3DStudio && (
-          <div className="p-6 pt-2 border-t border-stone-200 space-y-5">
-            {/* Üst 3D Kontrolleri */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#FAF9F6] border border-stone-200 p-3 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                {SEASON_META.map((s) => (
-                  <button
-                    key={s.key}
-                    onClick={() => setSeason(s.key)}
-                    className={`px-3 py-1.5 font-semibold border ${
-                      season === s.key
-                        ? 'bg-[#181816] text-white border-[#181816]'
-                        : 'bg-white text-stone-700 border-stone-300'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-                <div className="flex items-center gap-2 pl-2">
-                  <span>Saat:</span>
-                  <input
-                    type="range"
-                    min={6}
-                    max={19}
-                    step={0.25}
-                    value={solarHour}
-                    onChange={(e) => setSolarHour(Number(e.target.value))}
-                    className="w-28"
-                  />
-                  <strong className="font-mono">{Math.floor(solarHour)}:00</strong>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const nextBlk: MassBlock = {
-                      ...activeBlock,
-                      id: `ek_${Date.now().toString().slice(-4)}`,
-                      label: `Ek Kütle #${currentBlocks.length + 1}`,
-                      x: 0,
-                      z: 0,
-                    };
-                    setBlocks([...currentBlocks, nextBlk]);
-                    setSelectedBlockId(nextBlk.id);
-                  }}
-                  className="px-3 py-1.5 bg-[#181816] text-white font-semibold flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> 3D Kütle Ekle
-                </button>
-                <button
-                  onClick={() => setExportTrigger((n) => n + 1)}
-                  className="px-3 py-1.5 bg-white border border-stone-300 font-semibold flex items-center gap-1"
-                >
-                  <Box className="w-3.5 h-3.5 text-[#C85A17]" /> 3D .OBJ İndir
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-              <div className="lg:col-span-8">
-                <Viewport3D
-                  city={city}
-                  season={season}
-                  dayOfYear={SEASON_REPRESENTATIVE_DOY[season].doy}
-                  solarHour={solarHour}
-                  onChangeSolarHour={setSolarHour}
-                  site={DEFAULT_SITE}
-                  blocks={currentBlocks}
-                  neighbors={EMPTY_NEIGHBORS}
-                  selectedBlockId={activeBlock.id}
-                  onSelectBlock={(id) => {
-                    if (id) setSelectedBlockId(id);
-                  }}
-                  globalOrientationDeg={activeRec.recommendedOrientationDeg}
-                  courtyardAreaM2={activeRec.courtyardAreaM2}
-                  activeMaterialWallColor={activeWallColor}
-                  activeMaterialRoofColor={activeRoofColor}
-                  exportTrigger={exportTrigger}
-                  terrainGrid3x3M={tp.grid3x3M}
-                  nativeSlopePct={tp.slopePct}
-                  effectiveSlopePct={effectiveSlopePct}
-                  soilClass={effectiveSoilClass}
-                />
-              </div>
-
-              <div className="lg:col-span-4 bg-[#FAF9F6] border border-stone-200 p-4 space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <strong className="text-sm text-[#181816]">Seçili Kütle ve Çatı Ayarı</strong>
-                  {currentBlocks.length > 1 && (
-                    <button
-                      onClick={() => {
-                        const rem = currentBlocks.filter((b) => b.id !== activeBlock.id);
-                        setBlocks(rem);
-                        setSelectedBlockId(rem[0]?.id ?? null);
-                      }}
-                      className="text-red-600 flex items-center gap-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" /> Sil
-                    </button>
-                  )}
-                </div>
-
-                <select
-                  value={activeBlock.id}
-                  onChange={(e) => setSelectedBlockId(e.target.value)}
-                  className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
-                >
-                  {currentBlocks.map((b, i) => (
-                    <option key={b.id} value={b.id}>
-                      {i + 1}. {b.label} ({b.floors} Kat)
-                    </option>
-                  ))}
-                </select>
-
-                <div>
-                  <label className="block text-stone-600 mb-1">Çatı Tipi</label>
-                  <select
-                    value={activeBlock.roofType}
-                    onChange={(e) => {
-                      const rt = e.target.value as RoofTypeKey;
-                      setBlocks(
-                        currentBlocks.map((b) =>
-                          b.id === activeBlock.id ? { ...b, roofType: rt } : b
-                        )
-                      );
-                    }}
-                    className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
-                  >
-                    {ROOF_OPTIONS.map((ro) => (
-                      <option key={ro.key} value={ro.key}>
-                        {ro.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="flex justify-between mb-1">
-                    <span>Çatı Eğim Açısı</span>
-                    <strong>{activeBlock.roofPitchDeg}°</strong>
-                  </label>
-                  <input
-                    type="range"
-                    min={5}
-                    max={45}
-                    value={activeBlock.roofPitchDeg}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setBlocks(
-                        currentBlocks.map((b) =>
-                          b.id === activeBlock.id ? { ...b, roofPitchDeg: v } : b
-                        )
-                      );
-                    }}
-                    className="w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="flex justify-between mb-1">
-                    <span>Güney Saçak Uzantısı</span>
-                    <strong>{activeBlock.overhangSouthM} m</strong>
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={2.5}
-                    step={0.1}
-                    value={activeBlock.overhangSouthM}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setBlocks(
-                        currentBlocks.map((b) =>
-                          b.id === activeBlock.id ? { ...b, overhangSouthM: v } : b
-                        )
-                      );
-                    }}
-                    className="w-full"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <div>
-                    <label className="flex justify-between mb-1">
-                      <span>Kat Sayısı</span>
-                      <strong>{activeBlock.floors}</strong>
-                    </label>
-                    <input
-                      type="range"
-                      min={1}
-                      max={10}
-                      value={activeBlock.floors}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setBlocks(
-                          currentBlocks.map((b) =>
-                            b.id === activeBlock.id ? { ...b, floors: v } : b
-                          )
-                        );
-                      }}
-                      className="w-full"
-                    />
-                  </div>
-                  <div>
-                    <label className="flex justify-between mb-1">
-                      <span>Konum X</span>
-                      <strong>{activeBlock.x}m</strong>
-                    </label>
-                    <input
-                      type="range"
-                      min={-35}
-                      max={35}
-                      value={activeBlock.x}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setBlocks(
-                          currentBlocks.map((b) =>
-                            b.id === activeBlock.id ? { ...b, x: v } : b
-                          )
-                        );
-                      }}
-                      className="w-full"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* ===================================================================== */}
-      {/* BÖLÜM 6: AÇIK VE DOĞRULANABİLİR BİLİMSEL VERİ KAYNAKLARI              */}
+      {/* BÖLÜM 5: AÇIK VE DOĞRULANABİLİR BİLİMSEL VERİ KAYNAKLARI              */}
       {/* ===================================================================== */}
       <section className="bg-white border border-stone-200 p-6 space-y-3 text-xs text-stone-600">
         <div className="font-bold text-sm text-[#181816]">
-          Veri Doğrulama ve Bilimsel Kaynakça (Bu Konum İçin Teyit Linkleri)
+          Veri Doğrulama ve Bilimsel Kaynakça (Bu Tam Konum İçin Teyit Linkleri)
         </div>
         <p>
           Bu rapordaki hiçbir iklim, rüzgar, rakım, eğim veya deprem verisi rastgele üretilmemiştir;
           aşağıdaki uluslararası ve ulusal mühendislik kaynaklarından{' '}
           <strong>
-            ({city.lat.toFixed(4)}°K, {city.lng.toFixed(4)}°D)
+            ({city.lat.toFixed(5)}°K, {city.lng.toFixed(5)}°D)
           </strong>{' '}
           koordinatı için canlı hesaplanmıştır:
         </p>
@@ -1510,8 +1913,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             Yeniden Analiz Veri Seti ({ce.periodLabel}, {ce.daysAnalyzed} gün) —{' '}
             <a
               href={`https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat.toFixed(
-                4
-              )}&longitude=${city.lng.toFixed(4)}&start_date=${ce.startDateIso}&end_date=${
+                5
+              )}&longitude=${city.lng.toFixed(5)}&start_date=${ce.startDateIso}&end_date=${
                 ce.endDateIso
               }&daily=temperature_2m_mean,wind_direction_10m_dominant,wind_speed_10m_mean`}
               target="_blank"
@@ -1526,13 +1929,13 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             Yükselti Modeli —{' '}
             <a
               href={`https://www.openstreetmap.org/?mlat=${city.lat.toFixed(
-                5
-              )}&mlon=${city.lng.toFixed(5)}#map=15/${city.lat.toFixed(5)}/${city.lng.toFixed(5)}`}
+                6
+              )}&mlon=${city.lng.toFixed(6)}#map=17/${city.lat.toFixed(6)}/${city.lng.toFixed(6)}`}
               target="_blank"
               rel="noreferrer"
               className="text-[#C85A17] underline inline-flex items-center gap-0.5"
             >
-              OpenStreetMap Konumunu Aç <ExternalLink className="w-3 h-3" />
+              OpenStreetMap Tam Parsel Konumunu Aç <ExternalLink className="w-3 h-3" />
             </a>
           </li>
           <li>
@@ -1540,8 +1943,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             (MTA 1/500.000 Türkiye Jeoloji Haritası Birimleriyle Uyumlu) —{' '}
             <a
               href={`https://macrostrat.org/api/v2/geologic_units/map?lat=${city.lat.toFixed(
-                4
-              )}&lng=${city.lng.toFixed(4)}&response=long`}
+                5
+              )}&lng=${city.lng.toFixed(5)}&response=long`}
               target="_blank"
               rel="noreferrer"
               className="text-[#C85A17] underline inline-flex items-center gap-0.5"
@@ -1554,8 +1957,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             Hazards Program Güncel Kataloğu (120 km yarıçap) & AFAD TBDY 2018 Kütle İlkeleri —{' '}
             <a
               href={`https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=${city.lat.toFixed(
-                4
-              )}&longitude=${city.lng.toFixed(4)}&maxradiuskm=120&minmagnitude=4.5&starttime=1970-01-01`}
+                5
+              )}&longitude=${city.lng.toFixed(5)}&maxradiuskm=120&minmagnitude=4.5&starttime=1970-01-01`}
               target="_blank"
               rel="noreferrer"
               className="text-[#C85A17] underline inline-flex items-center gap-0.5"
@@ -1568,8 +1971,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
             Langley Research Center POWER Sustainable Buildings (community=SB) —{' '}
             <a
               href={`https://power.larc.nasa.gov/api/temporal/climatology/point?parameters=ALLSKY_SFC_SW_DWN,WS50M,GWETPROF,FROST_DAYS&community=SB&longitude=${city.lng.toFixed(
-                4
-              )}&latitude=${city.lat.toFixed(4)}&format=JSON`}
+                5
+              )}&latitude=${city.lat.toFixed(5)}&format=JSON`}
               target="_blank"
               rel="noreferrer"
               className="text-[#C85A17] underline inline-flex items-center gap-0.5"

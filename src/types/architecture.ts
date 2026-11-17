@@ -108,7 +108,18 @@ export type RoofTypeKey =
   | 'gable'
   | 'flat_green'
   | 'butterfly'
-  | 'louver_canopy';
+  | 'louver_canopy'
+  | 'dome'
+  | 'barrel_vault';
+
+export type SpecialBlockFeature =
+  | 'minaret'
+  | 'sadirvan'
+  | 'balconies'
+  | 'arcade'
+  | 'entrance_canopy'
+  | 'glass_bridge'
+  | 'outdoor_pool';
 
 export interface MassBlock {
   id: string;
@@ -129,6 +140,10 @@ export interface MassBlock {
   skylightRatio: number; // Çatı / Clerestory saydamlık oranı (0.0 - 0.7)
   ridgeDirection: 'EW' | 'NS';
   hasPvPanels: boolean;
+  specialFeature?: SpecialBlockFeature;
+  glazingStyle?: 'punched' | 'curtain_wall' | 'arched_classic' | 'minimal_hall';
+  customWallHex?: string;
+  customRoofHex?: string;
 }
 
 export interface NeighborContextBlock {

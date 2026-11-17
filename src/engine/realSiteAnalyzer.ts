@@ -110,9 +110,176 @@ const WIND_SECTORS: Array<{ code: string; name: string; deg: number }> = [
   { code: 'KB', name: 'Kuzeybatı (Karayel)', deg: 315 },
 ];
 
+export interface LocationSuggestion {
+  id: string;
+  lat: number;
+  lng: number;
+  shortTitle: string;
+  displayAddress: string;
+  categoryLabel: string;
+}
+
+function buildPreciseShortTitle(
+  addr: Record<string, string | undefined>,
+  explicitPlaceName?: string
+): string {
+  const streetOrPlace =
+    addr.amenity ||
+    addr.building ||
+    addr.tourism ||
+    addr.historic ||
+    addr.leisure ||
+    addr.road ||
+    addr.pedestrian ||
+    '';
+  const mahalle =
+    addr.neighbourhood ||
+    addr.quarter ||
+    addr.suburb ||
+    (addr.city_district && /mahalle/i.test(addr.city_district) ? addr.city_district : '') ||
+    addr.village ||
+    '';
+  const district =
+    addr.town ||
+    addr.county ||
+    (addr.city_district && !/mahalle/i.test(addr.city_district) ? addr.city_district : '') ||
+    addr.municipality ||
+    '';
+  const province = addr.province || addr.state || addr.city || '';
+
+  const parts: string[] = [];
+  if (
+    explicitPlaceName &&
+    !/°/.test(explicitPlaceName) &&
+    explicitPlaceName !== district &&
+    explicitPlaceName !== province
+  ) {
+    parts.push(explicitPlaceName);
+  }
+  if (streetOrPlace && !parts.includes(streetOrPlace)) parts.push(streetOrPlace);
+  if (mahalle && !parts.includes(mahalle)) parts.push(mahalle);
+  if (district && !parts.includes(district) && district !== province) parts.push(district);
+  if (province && !parts.includes(province)) parts.push(province);
+
+  if (parts.length >= 2) {
+    return parts.slice(0, 3).join(', ');
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+  return explicitPlaceName || 'Seçili Konum';
+}
+
+function parseDmsPair(text: string): { lat: number; lng: number } | null {
+  const dmsRegex =
+    /(\d{1,2})°\s*(\d{1,2})['’′]\s*([\d.]+)(?:["”″])?\s*([NSnsKkGg])\s*[,+;\s]+\s*(\d{1,3})°\s*(\d{1,2})['’′]\s*([\d.]+)(?:["”″])?\s*([EWewDdBb])/;
+  const m = text.match(dmsRegex);
+  if (!m) return null;
+  let lat = Number(m[1]) + Number(m[2]) / 60 + Number(m[3]) / 3600;
+  if (/[sSgG]/.test(m[4])) lat = -lat;
+  let lng = Number(m[5]) + Number(m[6]) / 60 + Number(m[7]) / 3600;
+  if (/[wWbB]/.test(m[8])) lng = -lng;
+  if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+    return { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) };
+  }
+  return null;
+}
+
 /**
- * Kullanıcının girdiği Google Maps linkini, ham koordinatı (39.96, 32.81)
- * veya şehir/ilçe/mahalle metnini ("Ankara Yenimahalle") gerçek koordinata çözer.
+ * Canlı Otomatik Tamamlama (Autocomplete):
+ * Kullanıcı yazarken mahalle, sokak, okul, cami, ilçe düzeyinde tam eşleşen noktaları getirir.
+ */
+export async function searchLocationSuggestions(query: string): Promise<LocationSuggestion[]> {
+  const q = query.trim();
+  if (q.length < 2 || /^https?:\/\//i.test(q)) return [];
+
+  // Eğer doğrudan koordinat yazıyorsa öneri olarak tam koordinatı döndür
+  const rawCoord = q.match(/^\s*(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*$/);
+  if (rawCoord) {
+    const lat = Number(rawCoord[1]);
+    const lng = Number(rawCoord[2]);
+    if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+      return [
+        {
+          id: `coord_${lat}_${lng}`,
+          lat,
+          lng,
+          shortTitle: `Tam Koordinat (${lat.toFixed(5)}°K, ${lng.toFixed(5)}°D)`,
+          displayAddress: 'Doğrudan girdiğiniz enlem ve boylam noktası',
+          categoryLabel: 'Tam Koordinat',
+        },
+      ];
+    }
+  }
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      q
+    )}&format=jsonv2&addressdetails=1&limit=6&accept-language=tr`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const arr = await res.json();
+      if (Array.isArray(arr) && arr.length > 0) {
+        return arr.map((hit: Record<string, unknown>, idx: number) => {
+          const lat = Number(Number(hit.lat).toFixed(6));
+          const lng = Number(Number(hit.lon).toFixed(6));
+          const addr = (hit.address || {}) as Record<string, string | undefined>;
+          const rawType = String(hit.type || hit.category || '');
+          let categoryLabel = 'Konum';
+          if (/suburb|neighbourhood|quarter|residential/.test(rawType)) categoryLabel = 'Mahalle / Semt';
+          else if (/road|street|pedestrian/.test(rawType)) categoryLabel = 'Cadde / Sokak';
+          else if (/school|university|mosque|hospital|building|yes/.test(rawType)) categoryLabel = 'Yapı / Parsel';
+          else if (/administrative|city|town|county/.test(rawType)) categoryLabel = 'İlçe / Şehir';
+
+          const shortTitle = buildPreciseShortTitle(addr, String(hit.name || q));
+          return {
+            id: `${hit.place_id || idx}_${lat}_${lng}`,
+            lat,
+            lng,
+            shortTitle,
+            displayAddress: String(hit.display_name || shortTitle),
+            categoryLabel,
+          };
+        });
+      }
+    }
+  } catch {
+    // Yedek servise geç
+  }
+
+  try {
+    const omUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+      q
+    )}&count=5&language=tr&format=json`;
+    const omRes = await fetch(omUrl);
+    if (omRes.ok) {
+      const omData = await omRes.json();
+      if (Array.isArray(omData.results)) {
+        return omData.results.map((r: Record<string, unknown>, idx: number) => {
+          const lat = Number(Number(r.latitude).toFixed(6));
+          const lng = Number(Number(r.longitude).toFixed(6));
+          const shortTitle = r.admin1 ? `${r.name}, ${r.admin1}` : String(r.name);
+          return {
+            id: `om_${idx}_${lat}_${lng}`,
+            lat,
+            lng,
+            shortTitle,
+            displayAddress: [r.name, r.admin2, r.admin1, r.country].filter(Boolean).join(', '),
+            categoryLabel: 'Yerleşim',
+          };
+        });
+      }
+    }
+  } catch {
+    // Boş liste döndür
+  }
+
+  return [];
+}
+
+/**
+ * Kullanıcının girdiği Google Maps / Yandex / Apple / OSM linkini, DMS veya ondalık koordinatı
+ * ya da mahalle/sokak/şehir metnini KAYDIRMADAN tam koordinata çözer.
  */
 export async function resolveLocationInput(rawInput: string): Promise<{
   lat: number;
@@ -122,73 +289,122 @@ export async function resolveLocationInput(rawInput: string): Promise<{
 }> {
   const input = rawInput.trim();
   if (!input) {
-    throw new Error('Lütfen bir şehir/ilçe adı yazın veya Google Maps linki yapıştırın.');
+    throw new Error('Lütfen bir mahalle/ilçe/sokak adı yazın, haritadan seçin veya harita linki yapıştırın.');
   }
 
-  // Kısa mobil harita linki kontrolü (goo.gl CORS engeli nedeniyle tarayıcıda açılamaz)
+  // Kısa mobil harita linki kontrolü (goo.gl CORS engeli nedeniyle tarayıcıda çözülemez)
   if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(input)) {
     throw new Error(
-      'Kısa mobil Google Maps linki algılandı. Lütfen bu linki tarayıcıda açıp adres çubuğundaki uzun Google Maps linkini yapıştırın veya doğrudan "Ankara Yenimahalle" gibi il/ilçe adını yazın.'
+      'Kısa mobil Google Maps linki algılandı. Tam noktayı kaydırmadan almak için linki tarayıcıda açıp adres çubuğundaki uzun linki yapıştırın veya "Haritadan Seç" ile arsanıza tıklayın.'
     );
   }
 
-  // 1. Google Maps !3dLAT!4dLNG tam pin koordinatı kontrolü (en hassas pin verisi)
-  const pinMatch = input.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (pinMatch) {
-    const lat = Number(pinMatch[1]);
-    const lng = Number(pinMatch[2]);
+  let decodedInput = input;
+  try {
+    decodedInput = decodeURIComponent(input.replace(/\+/g, ' '));
+  } catch {
+    decodedInput = input;
+  }
+
+  // 1. Google Maps !3dLAT!4dLNG tam pin koordinatı (Birden fazla varsa SONUNCU pin seçilen asıl parseldir!)
+  const allPinMatches = Array.from(decodedInput.matchAll(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/g));
+  if (allPinMatches.length > 0) {
+    const lastPin = allPinMatches[allPinMatches.length - 1];
+    const lat = Number(Number(lastPin[1]).toFixed(6));
+    const lng = Number(Number(lastPin[2]).toFixed(6));
     return await reverseGeocodeCoordinates(lat, lng);
   }
 
-  // 2. Google Maps @LAT,LNG veya ?q=LAT,LNG veya ?ll=LAT,LNG kontrolü
-  const urlCoordMatch =
-    input.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
-    input.match(/[?&](?:q|ll|query|center)=(-?\d+\.\d+)(?:,|%2C|\s+)(-?\d+\.\d+)/i);
-  if (urlCoordMatch) {
-    const lat = Number(urlCoordMatch[1]);
-    const lng = Number(urlCoordMatch[2]);
+  // 2. Derece-Dakika-Saniye (DMS) pin koordinatı (Örn: Google Maps boş arsaya bırakılan pin: 39°58'05.2"N 32°48'52.4"E)
+  const dmsCoord = parseDmsPair(decodedInput);
+  if (dmsCoord) {
+    return await reverseGeocodeCoordinates(dmsCoord.lat, dmsCoord.lng);
+  }
+
+  // 3. Yandex Haritalar kontrolü (Yandex pt=LON,LAT veya ll=LON,LAT şeklinde boylamı önce yazar!)
+  if (/yandex\./i.test(input)) {
+    const yxPt =
+      decodedInput.match(/[?&](?:pt|whatshere\[point\])=(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/i) ||
+      decodedInput.match(/[?&]ll=(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/i);
+    if (yxPt) {
+      const lng = Number(Number(yxPt[1]).toFixed(6));
+      const lat = Number(Number(yxPt[2]).toFixed(6));
+      if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        return await reverseGeocodeCoordinates(lat, lng);
+      }
+    }
+  }
+
+  // 4. OpenStreetMap linki (#map=18/LAT/LNG veya mlat=LAT&mlon=LNG)
+  const osmMatch =
+    decodedInput.match(/[?&]mlat=(-?\d+\.\d+).*?[?&]mlon=(-?\d+\.\d+)/i) ||
+    decodedInput.match(/#map=\d+\/(-?\d+\.\d+)\/(-?\d+\.\d+)/i);
+  if (osmMatch) {
+    const lat = Number(Number(osmMatch[1]).toFixed(6));
+    const lng = Number(Number(osmMatch[2]).toFixed(6));
     return await reverseGeocodeCoordinates(lat, lng);
   }
 
-  // 3. Doğrudan koordinat girişi (örn: "39.9661, 32.8088")
-  const rawCoordMatch = input.match(/^\s*(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*$/);
+  // 5. WhatsApp / Google / Apple Maps açık sorgu koordinatı (?q=LAT,LNG veya ?ll=LAT,LNG)
+  const queryCoordMatch = decodedInput.match(
+    /[?&](?:q|ll|query|center|daddr)=(-?\d+\.\d+)(?:,|%2C|\s+)(-?\d+\.\d+)/i
+  );
+  if (queryCoordMatch) {
+    const lat = Number(Number(queryCoordMatch[1]).toFixed(6));
+    const lng = Number(Number(queryCoordMatch[2]).toFixed(6));
+    return await reverseGeocodeCoordinates(lat, lng);
+  }
+
+  // 6. Google Maps kamera merkezi (@LAT,LNG) — yalnızca yukarıdaki tam pin verileri yoksa kullanılır
+  const atCoordMatch = decodedInput.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (atCoordMatch) {
+    const lat = Number(Number(atCoordMatch[1]).toFixed(6));
+    const lng = Number(Number(atCoordMatch[2]).toFixed(6));
+    return await reverseGeocodeCoordinates(lat, lng);
+  }
+
+  // 7. Doğrudan ondalık koordinat girişi (örn: "39.96615, 32.80882")
+  const rawCoordMatch = decodedInput.match(/^\s*(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*$/);
   if (rawCoordMatch) {
-    const lat = Number(rawCoordMatch[1]);
-    const lng = Number(rawCoordMatch[2]);
+    const lat = Number(Number(rawCoordMatch[1]).toFixed(6));
+    const lng = Number(Number(rawCoordMatch[2]).toFixed(6));
     if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
       return await reverseGeocodeCoordinates(lat, lng);
     }
   }
 
-  // 4. Google Maps linki içinde metin bazlı yer adı varsa (/maps/place/Ankara+Yenimahalle)
+  // 8. Google Maps linki içinde metin bazlı yer adı varsa (/maps/place/...)
   let searchPhrase = input;
   const placePathMatch = input.match(/\/maps\/(?:place|search)\/([^/?#]+)/i);
   if (placePathMatch) {
     searchPhrase = decodeURIComponent(placePathMatch[1].replace(/\+/g, ' '));
   }
 
-  // 5. OpenStreetMap Nominatim ile il/ilçe/mahalle düzeyinde arama
+  // 9. OpenStreetMap Nominatim ile mahalle/sokak/yapı hassasiyetinde arama
   try {
     const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
       searchPhrase
-    )}&format=json&addressdetails=1&limit=1&accept-language=tr`;
+    )}&format=jsonv2&addressdetails=1&limit=5&accept-language=tr`;
     const res = await fetch(nomUrl);
     if (res.ok) {
       const arr = await res.json();
       if (Array.isArray(arr) && arr.length > 0) {
-        const hit = arr[0];
-        const lat = Number(hit.lat);
-        const lng = Number(hit.lon);
-        const addr = hit.address || {};
-        const district =
-          addr.suburb || addr.town || addr.city_district || addr.county || addr.municipality || '';
-        const province = addr.province || addr.state || addr.city || hit.name || searchPhrase;
-        const shortTitle =
-          district && district !== province ? `${district}, ${province}` : province;
+        // Spesifik mahalle/sokak/bina eşleşmesi varsa kaba il merkezine tercih et
+        const hit =
+          arr.find((item: Record<string, unknown>) =>
+            /suburb|neighbourhood|quarter|road|building|amenity|school|mosque|university|hospital/i.test(
+              String(item.type || item.category || '')
+            )
+          ) || arr[0];
+
+        const lat = Number(Number(hit.lat).toFixed(6));
+        const lng = Number(Number(hit.lon).toFixed(6));
+        const addr = (hit.address || {}) as Record<string, string | undefined>;
+        const shortTitle = buildPreciseShortTitle(addr, String(hit.name || searchPhrase));
         return {
           lat,
           lng,
-          displayAddress: hit.display_name || shortTitle,
+          displayAddress: String(hit.display_name || shortTitle),
           shortTitle,
         };
       }
@@ -197,7 +413,7 @@ export async function resolveLocationInput(rawInput: string): Promise<{
     // Yedek servise geç
   }
 
-  // 6. Yedek: Open-Meteo Geocoding API
+  // 10. Yedek: Open-Meteo Geocoding API
   const omUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
     searchPhrase
   )}&count=1&language=tr&format=json`;
@@ -208,8 +424,8 @@ export async function resolveLocationInput(rawInput: string): Promise<{
       const r = omData.results[0];
       const shortTitle = r.admin1 ? `${r.name}, ${r.admin1}` : r.name;
       return {
-        lat: Number(r.latitude),
-        lng: Number(r.longitude),
+        lat: Number(Number(r.latitude).toFixed(6)),
+        lng: Number(Number(r.longitude).toFixed(6)),
         displayAddress: `${shortTitle}, ${r.country || ''}`,
         shortTitle,
       };
@@ -217,10 +433,14 @@ export async function resolveLocationInput(rawInput: string): Promise<{
   }
 
   throw new Error(
-    `"${searchPhrase}" konumu bulunamadı. Lütfen "Ankara Yenimahalle" gibi şehir ve ilçe adı yazın veya haritadan seçin.`
+    `"${searchPhrase}" konumu bulunamadı. Lütfen mahalle/ilçe adı yazıp açılan listeden seçin veya "Haritadan Seç" ile tam arsanıza tıklayın.`
   );
 }
 
+/**
+ * Seçilen tam koordinatı ASLA değiştirmeden (zoom=18 parsel/sokak hassasiyetinde)
+ * yalnızca o noktanın gerçek sokak, mahalle ve ilçe adını okur.
+ */
 export async function reverseGeocodeCoordinates(
   lat: number,
   lng: number
@@ -230,24 +450,21 @@ export async function reverseGeocodeCoordinates(
   displayAddress: string;
   shortTitle: string;
 }> {
+  const exactLat = Number(lat.toFixed(6));
+  const exactLng = Number(lng.toFixed(6));
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat.toFixed(
-      5
-    )}&lon=${lng.toFixed(5)}&zoom=14&accept-language=tr`;
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${exactLat}&lon=${exactLng}&zoom=18&addressdetails=1&accept-language=tr`;
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
-      const addr = data.address || {};
-      const district =
-        addr.suburb || addr.town || addr.city_district || addr.county || addr.village || '';
-      const province = addr.province || addr.state || addr.city || '';
-      const shortTitle =
-        district && province && district !== province
-          ? `${district}, ${province}`
-          : province || district || `${lat.toFixed(4)}°K, ${lng.toFixed(4)}°D`;
+      const addr = (data.address || {}) as Record<string, string | undefined>;
+      const shortTitle = buildPreciseShortTitle(
+        addr,
+        `${exactLat.toFixed(5)}°K, ${exactLng.toFixed(5)}°D`
+      );
       return {
-        lat,
-        lng,
+        lat: exactLat,
+        lng: exactLng,
         displayAddress: data.display_name || shortTitle,
         shortTitle,
       };
@@ -257,10 +474,10 @@ export async function reverseGeocodeCoordinates(
   }
 
   return {
-    lat,
-    lng,
-    displayAddress: `Koordinat: ${lat.toFixed(4)}°K, ${lng.toFixed(4)}°D`,
-    shortTitle: `${lat.toFixed(3)}°K, ${lng.toFixed(3)}°D`,
+    lat: exactLat,
+    lng: exactLng,
+    displayAddress: `Tam Koordinat: ${exactLat.toFixed(5)}°K, ${exactLng.toFixed(5)}°D`,
+    shortTitle: `${exactLat.toFixed(5)}°K, ${exactLng.toFixed(5)}°D`,
   };
 }
 

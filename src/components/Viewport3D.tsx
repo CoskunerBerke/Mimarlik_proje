@@ -362,6 +362,133 @@ function buildParametricRoofGroup(
       blade.castShadow = true;
       innerHolder.add(blade);
     }
+  } else if (block.roofType === 'dome') {
+    // Merkezi Kubbe + Kasnak Pencereleri + Köşe Kubbeleri + Alem (Cami / Külliye / Anıtsal Yapı)
+    const leadMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(block.customRoofHex ?? '#4B5563'),
+      roughness: 0.48,
+      metalness: 0.35,
+    });
+    const bronzeMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color('#B45309'),
+      roughness: 0.3,
+      metalness: 0.8,
+    });
+
+    // Çatı parapeti
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(spanX + 0.4, 0.35, spanZ + 0.4),
+      wallMat
+    );
+    deck.position.y = 0.18;
+    deck.castShadow = true;
+    deck.receiveShadow = true;
+    innerHolder.add(deck);
+
+    const minSpan = Math.min(spanX, spanZ);
+    const domeRadius = minSpan * 0.38;
+    const drumH = Math.max(1.1, domeRadius * 0.28);
+
+    // Sekizgen/Silindirik Kubbe Kasnağı
+    const drumGeo = new THREE.CylinderGeometry(domeRadius * 1.03, domeRadius * 1.06, drumH, 16);
+    const drumMesh = new THREE.Mesh(drumGeo, wallMat);
+    drumMesh.position.y = 0.35 + drumH / 2;
+    drumMesh.castShadow = true;
+    innerHolder.add(drumMesh);
+
+    // Kasnak etrafı günışığı pencereleri
+    const winRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(domeRadius * 1.045, domeRadius * 1.045, drumH * 0.52, 16),
+      glassMat
+    );
+    winRing.position.y = 0.35 + drumH * 0.52;
+    innerHolder.add(winRing);
+
+    // Ana Yarım Küre Kurşun Kubbe
+    const domeGeo = new THREE.SphereGeometry(
+      domeRadius,
+      32,
+      20,
+      0,
+      Math.PI * 2,
+      0,
+      Math.PI * 0.52
+    );
+    const domeMesh = new THREE.Mesh(domeGeo, leadMat);
+    domeMesh.position.y = 0.35 + drumH - 0.1;
+    domeMesh.castShadow = true;
+    domeMesh.receiveShadow = true;
+    innerHolder.add(domeMesh);
+
+    // Kubbe Alemi
+    const alemPole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.1, domeRadius * 0.28, 8),
+      bronzeMat
+    );
+    alemPole.position.y = 0.35 + drumH + domeRadius + domeRadius * 0.12;
+    innerHolder.add(alemPole);
+
+    // Geniş harimlerde 4 köşe ağırlık/köşe kubbesi
+    if (minSpan >= 11) {
+      const cRad = domeRadius * 0.28;
+      const offX = spanX * 0.34;
+      const offZ = spanZ * 0.34;
+      for (const [cx, cz] of [
+        [-offX, -offZ],
+        [offX, -offZ],
+        [-offX, offZ],
+        [offX, offZ],
+      ]) {
+        const subDrum = new THREE.Mesh(
+          new THREE.CylinderGeometry(cRad, cRad * 1.05, drumH * 0.55, 12),
+          wallMat
+        );
+        subDrum.position.set(cx, 0.35 + drumH * 0.27, cz);
+        const subDome = new THREE.Mesh(
+          new THREE.SphereGeometry(cRad, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52),
+          leadMat
+        );
+        subDome.position.set(cx, 0.35 + drumH * 0.52, cz);
+        subDome.castShadow = true;
+        innerHolder.add(subDrum, subDome);
+      }
+    }
+  } else if (block.roofType === 'barrel_vault') {
+    // Geniş Açıklıklı Tonoz / Kemer Çatı (Spor Salonu, Yüzme Havuzu, Otogar)
+    const vaultRadius = spanZ / 2;
+    const vaultRise = Math.min(5.2, Math.max(2.0, vaultRadius * 0.42));
+    const cylGeo = new THREE.CylinderGeometry(
+      vaultRadius,
+      vaultRadius,
+      spanX + 1.2,
+      28,
+      1,
+      false,
+      0,
+      Math.PI
+    );
+    // Cylinder Y eksenindedir; X ekseni boyunca yatıralım ve yüksekliğini vaultRise oranında ölçekleyelim
+    cylGeo.rotateZ(Math.PI / 2);
+    const pos = cylGeo.attributes.position;
+    for (let k = 0; k < pos.count; k++) {
+      const py = pos.getY(k);
+      pos.setY(k, Math.max(0, py) * (vaultRise / Math.max(0.5, vaultRadius)));
+    }
+    cylGeo.computeVertexNormals();
+
+    const vaultMesh = new THREE.Mesh(cylGeo, roofMat);
+    vaultMesh.castShadow = true;
+    vaultMesh.receiveShadow = true;
+    innerHolder.add(vaultMesh);
+    innerHolder.add(new THREE.LineSegments(new THREE.EdgesGeometry(cylGeo, 22), edgeMat));
+
+    // Tepe günışığı bandı
+    const topSkylight = new THREE.Mesh(
+      new THREE.BoxGeometry(spanX * 0.82, 0.22, spanZ * 0.22),
+      glassMat
+    );
+    topSkylight.position.set(0, vaultRise + 0.04, 0);
+    innerHolder.add(topSkylight);
   } else {
     // flat_green: Ekstansif yeşil çatı + parapet + kuzey tepe ışık fenerleri
     const greenBedGeo = new THREE.BoxGeometry(spanX * 0.94, 0.26, spanZ * 0.94);
@@ -452,7 +579,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
   const [showSunPath, setShowSunPath] = useState(true);
   const [showWindFlow, setShowWindFlow] = useState(true);
-  const [colorMode, setColorMode] = useState<'role' | 'material'>('role');
+  const [colorMode, setColorMode] = useState<'role' | 'material'>('material');
   const [isPlayingDay, setIsPlayingDay] = useState(false);
 
   const solarPos: SolarPosition = calculateSolarPosition(city.lat, dayOfYear, solarHour);
@@ -697,31 +824,47 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     orientedBuildingGroup.rotation.y = orientRad;
     massRoot.add(orientedBuildingGroup);
 
-    // Avlu mikroiklim su & peyzaj öğesi (merkez arazi kotunda)
+    // Avlu peyzaj zemini ve mimari ağaçlar
+    const hasExplicitSadirvanOrPool = blocks.some(
+      (b) => b.specialFeature === 'sadirvan' || b.specialFeature === 'outdoor_pool'
+    );
     if (courtyardAreaM2 >= 60) {
       const centerTerrY = sampleTerrainDeltaY(0, 0, terrainCfg);
-      const cSize = Math.min(20, Math.sqrt(courtyardAreaM2) * 0.65);
-      const lawnGeo = new THREE.BoxGeometry(cSize, 0.9, cSize * 0.82);
-      const lawnMat = new THREE.MeshStandardMaterial({ color: 0x84a96b, roughness: 0.92 });
+      const cSize = Math.min(22, Math.sqrt(courtyardAreaM2) * 0.65);
+      const lawnGeo = new THREE.BoxGeometry(cSize, 0.7, cSize * 0.85);
+      const lawnMat = new THREE.MeshStandardMaterial({
+        color: hasExplicitSadirvanOrPool ? 0xdad4c6 : 0x84a96b,
+        roughness: 0.92,
+      });
       const lawn = new THREE.Mesh(lawnGeo, lawnMat);
-      lawn.position.set(0, centerTerrY + 0.05, 0);
+      lawn.position.set(0, centerTerrY + 0.04, 0);
       lawn.receiveShadow = true;
       orientedBuildingGroup.add(lawn);
-
-      const poolGeo = new THREE.BoxGeometry(cSize * 0.42, 0.18, cSize * 0.34);
-      const poolMat = new THREE.MeshStandardMaterial({
-        color: 0x38bdf8,
-        roughness: 0.18,
-        metalness: 0.25,
-      });
-      const pool = new THREE.Mesh(poolGeo, poolMat);
-      pool.position.set(0, centerTerrY + 0.52, 0);
-      orientedBuildingGroup.add(pool);
     }
 
-    // Her bir 3D Kütle Bloğu, Eğim Subasmanı/İstinat Perdesi ve Parametrik Çatısı
+    // Parsel çeperine sade 3D mimari ağaçlar ekle (ölçek algısını güçlendirir)
+    const treeTrunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4f3a, roughness: 0.9 });
+    const treeCrownMat = new THREE.MeshStandardMaterial({ color: 0x5c7c47, roughness: 0.85 });
+    const treeSpots: Array<[number, number]> = [
+      [-site.parcelWidthM * 0.41, site.parcelDepthM * 0.38],
+      [site.parcelWidthM * 0.41, site.parcelDepthM * 0.38],
+      [-site.parcelWidthM * 0.42, -site.parcelDepthM * 0.38],
+      [site.parcelWidthM * 0.42, -site.parcelDepthM * 0.38],
+    ];
+    for (const [tx, tz] of treeSpots) {
+      const ty = sampleTerrainDeltaY(tx, tz, terrainCfg);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 2.2, 7), treeTrunkMat);
+      trunk.position.set(tx, ty + 1.1, tz);
+      trunk.castShadow = true;
+      const crown = new THREE.Mesh(new THREE.SphereGeometry(1.85, 12, 10), treeCrownMat);
+      crown.position.set(tx, ty + 3.4, tz);
+      crown.scale.set(1, 1.25, 1);
+      crown.castShadow = true;
+      massRoot.add(trunk, crown);
+    }
+
+    // Her bir 3D Kütle Bloğu, Özel Mimari Elemanlar ve Parametrik Çatısı
     for (const b of blocks) {
-      // Bloğun 4 köşesindeki gerçek arazi yüksekliğini örnekle -> havada kalmasın, yamaca otursun!
       const halfW = b.width / 2;
       const halfD = b.depth / 2;
       const cornerOffsets = [
@@ -747,6 +890,144 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       blockGroup.position.set(b.x, groundFloorY, b.z);
       blockGroup.rotation.y = (-b.rotationDeg * Math.PI) / 180;
 
+      const totalH = b.floors * b.floorHeight;
+      const isSelected = b.id === selectedBlockId;
+
+      const baseColor =
+        colorMode === 'role'
+          ? ROLE_COLORS[b.role]
+          : b.customWallHex ?? activeMaterialWallColor;
+      const roofColor =
+        colorMode === 'role'
+          ? '#334155'
+          : b.customRoofHex ?? activeMaterialRoofColor;
+
+      // ÖZEL ELEMAN 1: GERÇEKÇİ 3D MİNARE
+      if (b.specialFeature === 'minaret') {
+        const stoneMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(baseColor),
+          roughness: 0.75,
+        });
+        const leadMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(roofColor),
+          roughness: 0.45,
+          metalness: 0.35,
+        });
+        const kursuH = Math.min(4.5, totalH * 0.18);
+        const shaftH = totalH * 0.62;
+        const spireH = totalH * 0.2;
+        const rShaft = Math.max(0.75, b.width * 0.34);
+
+        const plinthMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(b.width, plinthH + kursuH, b.depth),
+          stoneMat
+        );
+        plinthMesh.position.y = (kursuH - plinthH) / 2;
+        plinthMesh.castShadow = true;
+        blockGroup.add(plinthMesh);
+
+        const shaft = new THREE.Mesh(
+          new THREE.CylinderGeometry(rShaft * 0.86, rShaft, shaftH, 16),
+          stoneMat
+        );
+        shaft.position.y = kursuH + shaftH / 2;
+        shaft.castShadow = true;
+        blockGroup.add(shaft);
+
+        // Şerefe balkonu (yüksek minarelerde çift şerefe)
+        const serefeHeights = totalH >= 28 ? [kursuH + shaftH * 0.62, kursuH + shaftH * 0.92] : [kursuH + shaftH * 0.82];
+        for (const sy of serefeHeights) {
+          const serefe = new THREE.Mesh(
+            new THREE.CylinderGeometry(rShaft * 1.42, rShaft * 1.1, 0.75, 16),
+            stoneMat
+          );
+          serefe.position.y = sy;
+          serefe.castShadow = true;
+          blockGroup.add(serefe);
+        }
+
+        // Külah (konik kurşun külah) + Alem
+        const kulah = new THREE.Mesh(
+          new THREE.ConeGeometry(rShaft * 0.88, spireH, 16),
+          leadMat
+        );
+        kulah.position.y = kursuH + shaftH + spireH / 2;
+        kulah.castShadow = true;
+        blockGroup.add(kulah);
+
+        orientedBuildingGroup.add(blockGroup);
+        selectableMeshesRef.current.push({ mesh: blockGroup, blockId: b.id });
+        continue;
+      }
+
+      // ÖZEL ELEMAN 2: MERKEZİ AVLU ŞADIRVANI
+      if (b.specialFeature === 'sadirvan') {
+        const stoneMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(baseColor),
+          roughness: 0.7,
+        });
+        const waterMat = new THREE.MeshStandardMaterial({
+          color: 0x0ea5e9,
+          roughness: 0.15,
+          metalness: 0.3,
+        });
+        const basin = new THREE.Mesh(
+          new THREE.CylinderGeometry(b.width * 0.38, b.width * 0.4, 0.9, 8),
+          stoneMat
+        );
+        basin.position.y = 0.45;
+        const water = new THREE.Mesh(
+          new THREE.CylinderGeometry(b.width * 0.33, b.width * 0.33, 0.94, 8),
+          waterMat
+        );
+        water.position.y = 0.46;
+        blockGroup.add(basin, water);
+
+        for (let c = 0; c < 8; c++) {
+          const ang = (c / 8) * Math.PI * 2;
+          const col = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.14, 0.16, b.floorHeight, 8),
+            stoneMat
+          );
+          col.position.set(
+            Math.cos(ang) * b.width * 0.44,
+            b.floorHeight / 2,
+            Math.sin(ang) * b.depth * 0.44
+          );
+          col.castShadow = true;
+          blockGroup.add(col);
+        }
+
+        const roofGrp = buildParametricRoofGroup(b, baseColor, roofColor);
+        blockGroup.add(roofGrp);
+        orientedBuildingGroup.add(blockGroup);
+        selectableMeshesRef.current.push({ mesh: blockGroup, blockId: b.id });
+        continue;
+      }
+
+      // ÖZEL ELEMAN 3: AÇIK YÜZME HAVUZU & GÜNEŞLENME TERASI
+      if (b.specialFeature === 'outdoor_pool') {
+        const deckMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(b.width + 2.4, plinthH + 0.25, b.depth + 2.4),
+          new THREE.MeshStandardMaterial({ color: 0xe7e2d6, roughness: 0.85 })
+        );
+        deckMesh.position.y = -plinthH / 2 + 0.1;
+        deckMesh.receiveShadow = true;
+        const waterMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(b.width, 0.28, b.depth),
+          new THREE.MeshStandardMaterial({
+            color: 0x0ea5e9,
+            roughness: 0.12,
+            metalness: 0.35,
+          })
+        );
+        waterMesh.position.y = 0.16;
+        blockGroup.add(deckMesh, waterMesh);
+        orientedBuildingGroup.add(blockGroup);
+        selectableMeshesRef.current.push({ mesh: blockGroup, blockId: b.id });
+        continue;
+      }
+
       // Eğimli araziye gömülen betonarme/taş subasman & istinat bazası
       const plinthGeo = new THREE.BoxGeometry(b.width + 0.3, plinthH, b.depth + 0.3);
       const plinthMat = new THREE.MeshStandardMaterial({
@@ -759,19 +1040,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       plinthMesh.receiveShadow = true;
       blockGroup.add(plinthMesh);
 
-      const totalH = b.floors * b.floorHeight;
-      const isSelected = b.id === selectedBlockId;
-
-      const baseColor =
-        colorMode === 'role' ? ROLE_COLORS[b.role] : activeMaterialWallColor;
-      const roofColor =
-        colorMode === 'role' ? '#334155' : activeMaterialRoofColor;
-
       const bodyGeo = new THREE.BoxGeometry(b.width, totalH, b.depth);
       const bodyMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(baseColor),
-        roughness: 0.76,
-        metalness: 0.05,
+        roughness: 0.78,
+        metalness: 0.04,
       });
       const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
       bodyMesh.position.y = totalH / 2;
@@ -779,25 +1052,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       bodyMesh.receiveShadow = true;
       blockGroup.add(bodyMesh);
 
-      // Keskin mimari kenar çizgileri
       const edges = new THREE.LineSegments(
         new THREE.EdgesGeometry(bodyGeo),
         new THREE.LineBasicMaterial({
-          color: isSelected ? 0xc85a17 : 0x1c1917,
-          linewidth: 1,
+          color: isSelected ? 0xc85a17 : 0x292524,
         })
       );
       edges.position.y = totalH / 2;
       blockGroup.add(edges);
 
-      // Kat döşemesi çizgileri ve cephe pencere bantları + Güney güneş kırıcı saçakları
-      const slabMat = new THREE.MeshBasicMaterial({ color: 0x292524 });
+      // Kat Döşeme Silmeleri, Gerçekçi Çerçeveli Pencereler, Balkonlar, Revaklar ve Giriş Saçağı
+      const slabMat = new THREE.MeshStandardMaterial({ color: 0xd6d3cb, roughness: 0.7 });
+      const mullionMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.5 });
       const winGlassMat = new THREE.MeshStandardMaterial({
-        color: 0xbae6fd,
-        roughness: 0.2,
-        metalness: 0.35,
+        color: 0x93c5fd,
+        roughness: 0.14,
+        metalness: 0.45,
         transparent: true,
-        opacity: 0.72,
+        opacity: 0.78,
       });
       const shadeMat = new THREE.MeshStandardMaterial({ color: 0x44403c, roughness: 0.6 });
 
@@ -805,48 +1077,180 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         const yFloor = f * b.floorHeight;
         if (f > 0) {
           const band = new THREE.Mesh(
-            new THREE.BoxGeometry(b.width + 0.08, 0.1, b.depth + 0.08),
+            new THREE.BoxGeometry(b.width + 0.18, 0.16, b.depth + 0.18),
             slabMat
           );
           band.position.y = yFloor;
           blockGroup.add(band);
         }
 
-        // Güney (+Z) ve Kuzey (-Z) pencere şeritleri
-        if (b.role !== 'service_buffer') {
-          const winH = b.floorHeight * 0.44;
-          const winY = yFloor + b.floorHeight * 0.56;
-
-          const sWin = new THREE.Mesh(
-            new THREE.BoxGeometry(b.width * 0.84, winH, 0.08),
+        // Cephe Pencere Düzeni (Bina Tipine Özel Gerçekçi Ritim)
+        if (b.glazingStyle === 'curtain_wall') {
+          const cwH = b.floorHeight * 0.76;
+          const cwY = yFloor + b.floorHeight * 0.5;
+          const sGlass = new THREE.Mesh(
+            new THREE.BoxGeometry(b.width * 0.92, cwH, 0.08),
             winGlassMat
           );
-          sWin.position.set(0, winY, b.depth / 2 + 0.03);
-          blockGroup.add(sWin);
+          sGlass.position.set(0, cwY, b.depth / 2 + 0.03);
+          const nGlass = sGlass.clone();
+          nGlass.position.set(0, cwY, -b.depth / 2 - 0.03);
+          blockGroup.add(sGlass, nGlass);
 
-          const nWin = new THREE.Mesh(
-            new THREE.BoxGeometry(b.width * 0.78, winH, 0.08),
-            winGlassMat
-          );
-          nWin.position.set(0, winY, -b.depth / 2 - 0.03);
-          blockGroup.add(nWin);
+          // Düşey giydirme cephe kayıtları (mullions)
+          const mCount = Math.max(3, Math.round(b.width / 2.4));
+          for (let m = 0; m <= mCount; m++) {
+            const mx = -b.width * 0.46 + (m / mCount) * (b.width * 0.92);
+            const mul = new THREE.Mesh(new THREE.BoxGeometry(0.08, cwH, 0.14), mullionMat);
+            mul.position.set(mx, cwY, b.depth / 2 + 0.04);
+            blockGroup.add(mul);
+          }
+        } else if (b.glazingStyle === 'arched_classic') {
+          if (f === 0) {
+            // Cami / Anıtsal Taş Cephe: 4 cephede alt ve üst sıra kemerli pencere ritmi
+            const bays = Math.max(2, Math.round(b.width / 4.2));
+            for (let k = 0; k < bays; k++) {
+              const wx = -b.width * 0.36 + (bays === 1 ? 0 : (k / (bays - 1)) * (b.width * 0.72));
+              const lowH = Math.min(2.8, totalH * 0.28);
+              const lowW = new THREE.Mesh(new THREE.BoxGeometry(1.3, lowH, 0.12), winGlassMat);
+              lowW.position.set(wx, lowH * 0.6 + 0.8, b.depth / 2 + 0.03);
+              const lowWN = lowW.clone();
+              lowWN.position.z = -b.depth / 2 - 0.03;
+              blockGroup.add(lowW, lowWN);
 
-          // Güney cephe yatay güneş kırıcı çıkması
-          if (b.overhangSouthM > 0.2) {
-            const briseDepth = Math.min(1.4, b.overhangSouthM * 0.65);
+              // Doğu ve Batı cephe pencereleri
+              const sideW = new THREE.Mesh(new THREE.BoxGeometry(0.12, lowH, 1.3), winGlassMat);
+              sideW.position.set(b.width / 2 + 0.03, lowH * 0.6 + 0.8, wx * (b.depth / b.width));
+              const sideWW = sideW.clone();
+              sideWW.position.x = -b.width / 2 - 0.03;
+              blockGroup.add(sideW, sideWW);
+
+              if (totalH >= 7.5) {
+                const upW = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.8, 0.12), winGlassMat);
+                upW.position.set(wx, totalH * 0.7, b.depth / 2 + 0.03);
+                const upWN = upW.clone();
+                upWN.position.z = -b.depth / 2 - 0.03;
+                blockGroup.add(upW, upWN);
+              }
+            }
+          }
+        } else if (b.glazingStyle === 'minimal_hall') {
+          if (f === 0) {
+            // Spor / Fabrika / Oditoryum üst günışığı şeridi
+            const ribH = Math.min(1.6, totalH * 0.22);
+            const rib = new THREE.Mesh(
+              new THREE.BoxGeometry(b.width * 0.88, ribH, 0.1),
+              winGlassMat
+            );
+            rib.position.set(0, totalH - ribH * 0.9, b.depth / 2 + 0.03);
+            const ribN = rib.clone();
+            ribN.position.z = -b.depth / 2 - 0.03;
+            blockGroup.add(rib, ribN);
+          }
+        } else {
+          // Gerçekçi Konut / Okul / Hastane Modüler Çerçeveli Pencere Dizisi
+          const bayCount = Math.max(2, Math.round(b.width / 3.6));
+          const winW = Math.min(1.8, (b.width / bayCount) * 0.58);
+          const winH = b.floorHeight * 0.48;
+          const winY = yFloor + b.floorHeight * 0.55;
+
+          for (let k = 0; k < bayCount; k++) {
+            const wx =
+              -b.width * 0.4 +
+              (bayCount === 1 ? 0 : (k / (bayCount - 1)) * (b.width * 0.8));
+            const frame = new THREE.Mesh(
+              new THREE.BoxGeometry(winW + 0.14, winH + 0.14, 0.08),
+              mullionMat
+            );
+            frame.position.set(wx, winY, b.depth / 2 + 0.02);
+            const pane = new THREE.Mesh(new THREE.BoxGeometry(winW, winH, 0.1), winGlassMat);
+            pane.position.set(wx, winY, b.depth / 2 + 0.03);
+
+            const paneN = pane.clone();
+            paneN.position.z = -b.depth / 2 - 0.03;
+            blockGroup.add(frame, pane, paneN);
+          }
+
+          // Güney cephe güneş kırıcı saçak
+          if (b.overhangSouthM > 0.25 && b.specialFeature !== 'balconies') {
+            const briseDepth = Math.min(1.2, b.overhangSouthM * 0.55);
             const brise = new THREE.Mesh(
-              new THREE.BoxGeometry(b.width * 0.88, 0.09, briseDepth),
+              new THREE.BoxGeometry(b.width * 0.9, 0.09, briseDepth),
               shadeMat
             );
-            brise.position.set(
-              0,
-              winY + winH / 2 + 0.06,
-              b.depth / 2 + briseDepth / 2
-            );
+            brise.position.set(0, winY + winH / 2 + 0.08, b.depth / 2 + briseDepth / 2);
             brise.castShadow = true;
             blockGroup.add(brise);
           }
         }
+
+        // ÖZEL ELEMAN 4: KONUT / OTEL / VİLLA ÇIKMA BALKONLAR (1. kattan itibaren)
+        if (b.specialFeature === 'balconies' && f >= 1) {
+          const balcCount = Math.max(2, Math.round(b.width / 6.5));
+          const balcW = Math.min(3.8, (b.width / balcCount) * 0.65);
+          const balcD = 1.45;
+          for (let k = 0; k < balcCount; k++) {
+            const bx =
+              -b.width * 0.34 +
+              (balcCount === 1 ? 0 : (k / (balcCount - 1)) * (b.width * 0.68));
+            const slabB = new THREE.Mesh(
+              new THREE.BoxGeometry(balcW, 0.16, balcD),
+              slabMat
+            );
+            slabB.position.set(bx, yFloor + 0.08, b.depth / 2 + balcD / 2);
+            slabB.castShadow = true;
+
+            const railB = new THREE.Mesh(
+              new THREE.BoxGeometry(balcW, 0.95, 0.06),
+              winGlassMat
+            );
+            railB.position.set(bx, yFloor + 0.62, b.depth / 2 + balcD - 0.05);
+            blockGroup.add(slabB, railB);
+          }
+        }
+      }
+
+      // ÖZEL ELEMAN 5: ZEMİN KAT REVAK / KEMERLİ KOLONAD (Cami Avlusu, Çarşı)
+      if (b.specialFeature === 'arcade') {
+        const colCount = Math.max(3, Math.round(Math.max(b.width, b.depth) / 3.8));
+        const colMat = new THREE.MeshStandardMaterial({ color: 0xd6cfc2, roughness: 0.8 });
+        const alongX = b.width >= b.depth;
+        for (let c = 0; c < colCount; c++) {
+          const t = colCount === 1 ? 0 : -0.44 + (c / (colCount - 1)) * 0.88;
+          const col = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.2, 0.22, b.floorHeight * 0.95, 10),
+            colMat
+          );
+          if (alongX) {
+            col.position.set(b.width * t, b.floorHeight * 0.48, b.depth / 2 + 0.55);
+          } else {
+            col.position.set(
+              b.x >= 0 ? -b.width / 2 - 0.55 : b.width / 2 + 0.55,
+              b.floorHeight * 0.48,
+              b.depth * t
+            );
+          }
+          col.castShadow = true;
+          blockGroup.add(col);
+        }
+      }
+
+      // ÖZEL ELEMAN 6: GİRİŞ KANOPİSİ / SAÇAĞI (Hastane Acil, Okul, Otel Girişi)
+      if (b.specialFeature === 'entrance_canopy') {
+        const canW = Math.min(8.5, b.width * 0.45);
+        const canD = 3.2;
+        const canY = Math.min(3.6, b.floorHeight * 0.92);
+        const canSlab = new THREE.Mesh(
+          new THREE.BoxGeometry(canW, 0.22, canD),
+          shadeMat
+        );
+        canSlab.position.set(0, canY, b.depth / 2 + canD / 2);
+        canSlab.castShadow = true;
+        const pL = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, canY, 8), shadeMat);
+        pL.position.set(-canW * 0.42, canY / 2, b.depth / 2 + canD - 0.3);
+        const pR = pL.clone();
+        pR.position.x = canW * 0.42;
+        blockGroup.add(canSlab, pL, pR);
       }
 
       // Seçili kütle taban vurgusu
@@ -1184,7 +1588,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             className="px-2.5 py-1 font-medium bg-white text-[#161615] border border-stone-300 hover:bg-stone-50 transition flex items-center gap-1 whitespace-nowrap"
           >
             <Layers className="w-3.5 h-3.5" />
-            {colorMode === 'role' ? 'Renk: Oda Görevleri' : 'Renk: Dış Malzeme'}
+            {colorMode === 'material' ? 'Görünüm: Gerçekçi Mimari' : 'Görünüm: Zon Diyagramı'}
           </button>
         </div>
 

@@ -71,6 +71,22 @@ export const ROOF_TYPES_META: Record<RoofTypeKey, RoofTypeMeta> = {
       'Yaz gündönümü güneş açısına göre kalibre edilmiş açılı kanatlarla avlu ve yarı-açık sosyal teraslarda gölgeli mikroiklim üretir.',
     bestFor: 'Sıcak-Nemli Akdeniz/Ege, Sosyal Avlu ve Fuaye Kütleleri',
   },
+  dome: {
+    key: 'dome',
+    name: 'Kasnak Pencereli Merkezi Kubbe & Revak Örtüsü',
+    shortName: 'Merkezi Kubbe',
+    description:
+      'Yüksek kasnak pencerelerinden süzülen dolaylı günışığı ve doğal sıcak hava yükselmesi (baca etkisi) sağlayan kubbeli ibadet/toplanma örtüsü.',
+    bestFor: 'Cami, İbadethane, Külliye ve Anıtsal Kamusal Mekânlar',
+  },
+  barrel_vault: {
+    key: 'barrel_vault',
+    name: 'Geniş Açıklıklı Tonoz / Kemer Çatı (Barrel Vault)',
+    shortName: 'Tonoz / Kemer Çatı',
+    description:
+      'Kolonsuz geniş açıklık geçen aerodinamik kemer kesitiyle rüzgar yükünü azaltır ve tepe bantlarından dengeli ışık alır.',
+    bestFor: 'Spor Salonu, Yüzme Havuzu, Otogar/Terminal ve Sergi Holleri',
+  },
 };
 
 export interface RoofOptimizationResult {
@@ -114,12 +130,37 @@ export function recommendOptimalRoofForBlock(
     Math.max(0.6, Math.min(2.2, windowHeightRef / Math.tan(summerNoon * DEG2RAD) + 0.35)).toFixed(2)
   );
 
-  // 1. Kuzey homojen günışığı gerektiren stüdyo/sergi/üretim/spor/kütüphane kütleleri
+  // 0. Cami / İbadethane veya Spor / Terminal özel geniş açıklık örtüleri
+  if (funcKey === 'religious' && block.role === 'primary_living') {
+    return {
+      roofType: 'dome',
+      roofPitchDeg: 35,
+      secondaryPitchDeg: 85,
+      overhangSouthM: idealOverhang,
+      sawtoothCount: 1,
+      skylightRatio: 0.28,
+      hasPvPanels: false,
+      reasoning: `Ana ibadet mekânında (harim) kasnak pencereleriyle kamaşmasız çevre günışığı alan ve ısınan havayı kubbe üst kotundan tahliye eden merkezi kubbe örtüsü.`,
+    };
+  }
+  if ((funcKey === 'sports' || funcKey === 'transport') && block.role === 'north_daylight') {
+    return {
+      roofType: 'barrel_vault',
+      roofPitchDeg: 24,
+      secondaryPitchDeg: 85,
+      overhangSouthM: Math.max(1.4, idealOverhang + 0.4),
+      sawtoothCount: 2,
+      skylightRatio: 0.32,
+      hasPvPanels: true,
+      reasoning: `Kolonsuz geniş açıklığı hafif çelik/lamine ahşap kemerle geçen, rüzgar aerodinamiği yüksek ve tepe günışığı bantlı tonoz çatı.`,
+    };
+  }
+
+  // 1. Kuzey homojen günışığı gerektiren stüdyo/sergi/üretim/kütüphane kütleleri
   if (
     block.role === 'north_daylight' ||
     funcKey === 'atelier' ||
     funcKey === 'industrial' ||
-    funcKey === 'sports' ||
     funcKey === 'library' ||
     (funcKey === 'cultural' && block.role !== 'service_buffer')
   ) {
