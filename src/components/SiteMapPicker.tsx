@@ -28,8 +28,59 @@ export const SiteMapPicker: React.FC<SiteMapPickerProps> = ({
   const internalPickRef = useRef(false);
 
   const [layerMode, setLayerMode] = useState<'satellite' | 'street'>(defaultLayer);
+  const [imageryMeta, setImageryMeta] = useState<string | null>(null);
 
   onPickRef.current = onPickCoordinate;
+
+  // Seçilen koordinattaki uydu görüntüsünün gerçek çekim tarihini ve çözünürlüğünü sorgula
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const url = `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/identify?geometry=${lng.toFixed(
+          5
+        )},${lat.toFixed(
+          5
+        )}&geometryType=esriGeometryPoint&sr=4326&layers=all&tolerance=1&mapExtent=${(
+          lng - 0.01
+        ).toFixed(4)},${(lat - 0.01).toFixed(4)},${(lng + 0.01).toFixed(4)},${(
+          lat + 0.01
+        ).toFixed(4)}&imageDisplay=800,600,96&returnGeometry=false&f=json`;
+        const res = await fetch(url);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const hit = Array.isArray(data?.results)
+          ? data.results.find(
+              (r: { attributes?: Record<string, unknown> }) =>
+                r.attributes?.['DATE (YYYYMMDD)'] || r.attributes?.SRC_DATE
+            )
+          : null;
+        if (hit?.attributes && !cancelled) {
+          const rawDate = String(
+            hit.attributes['DATE (YYYYMMDD)'] || hit.attributes.SRC_DATE || ''
+          );
+          const rawRes = Number(
+            hit.attributes['RESOLUTION (M)'] || hit.attributes.SRC_RES || 0
+          );
+          if (/^\d{8}$/.test(rawDate)) {
+            const formatted = `${rawDate.slice(6, 8)}.${rawDate.slice(4, 6)}.${rawDate.slice(
+              0,
+              4
+            )}`;
+            const resText = rawRes > 0 ? ` · ${rawRes.toFixed(2)}m çözünürlük` : '';
+            setImageryMeta(`Uydu Çekim Tarihi: ${formatted}${resText}`);
+          }
+        }
+      } catch {
+        // Metadata alınamazsa sessizce geç
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [lat, lng]);
 
   useEffect(() => {
     const el = mapContainerRef.current;
@@ -180,9 +231,14 @@ export const SiteMapPicker: React.FC<SiteMapPickerProps> = ({
           </button>
         </div>
 
-        <span className="font-mono text-[11px] font-semibold text-[#181816]">
-          Seçili Nokta: {lat.toFixed(5)}°K, {lng.toFixed(5)}°D
-        </span>
+        <div className="flex flex-wrap items-center gap-3">
+          {layerMode === 'satellite' && imageryMeta && (
+            <span className="text-[11px] font-semibold text-[#15803D]">{imageryMeta}</span>
+          )}
+          <span className="font-mono text-[11px] font-semibold text-[#181816]">
+            Seçili Nokta: {lat.toFixed(5)}°K, {lng.toFixed(5)}°D
+          </span>
+        </div>
       </div>
 
       <div ref={mapContainerRef} className={`w-full ${heightClass} z-0 cursor-crosshair`} />
