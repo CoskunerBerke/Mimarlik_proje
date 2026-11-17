@@ -20,7 +20,8 @@ import {
   sampleTerrainDeltaY,
   TerrainSamplerConfig,
 } from '../engine/terrainMeshHelper';
-import { Compass, Eye, Layers, Play, Pause, Sun, Wind } from 'lucide-react';
+import { Imported3DModelData, PlanUnderlayData } from '../engine/projectFileImporter';
+import { Compass, Eye, FileUp, Layers, Play, Pause, Sun, Wind } from 'lucide-react';
 
 interface Viewport3DProps {
   city: CityClimateProfile;
@@ -42,6 +43,9 @@ interface Viewport3DProps {
   nativeSlopePct?: number;
   effectiveSlopePct?: number;
   soilClass?: 'ZB' | 'ZC' | 'ZD' | 'ZE';
+  planUnderlay?: PlanUnderlayData | null;
+  imported3DModel?: Imported3DModelData | null;
+  onDropProjectFile?: (file: File) => void;
 }
 
 const ROLE_COLORS: Record<SpaceZoneRole, string> = {
@@ -564,6 +568,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   nativeSlopePct = 0,
   effectiveSlopePct = 0,
   soilClass = 'ZC',
+  planUnderlay = null,
+  imported3DModel = null,
+  onDropProjectFile,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -581,6 +588,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [showWindFlow, setShowWindFlow] = useState(true);
   const [colorMode, setColorMode] = useState<'role' | 'material'>('material');
   const [isPlayingDay, setIsPlayingDay] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   const solarPos: SolarPosition = calculateSolarPosition(city.lat, dayOfYear, solarHour);
   const seasonStats = city.seasons[season];
@@ -824,11 +832,114 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     orientedBuildingGroup.rotation.y = orientRad;
     massRoot.add(orientedBuildingGroup);
 
+    // A2) Mimarın Yüklediği PDF / AutoCAD DXF / Kat Planı Görseli Altlığı (Eğimli Arazinin Tam Üzerine Serilir)
+    if (planUnderlay) {
+      const uW = planUnderlay.widthM;
+      const uD = uW / Math.max(0.15, planUnderlay.aspectRatio);
+      const segs = 32;
+      const sheetGeo = new THREE.PlaneGeometry(uW, uD, segs, segs);
+      sheetGeo.rotateX(-Math.PI / 2);
+
+      const rotRad = (-planUnderlay.rotationDeg * Math.PI) / 180;
+      const cosR = Math.cos(rotRad);
+      const sinR = Math.sin(rotRad);
+
+      const posAttr = sheetGeo.attributes.position;
+      for (let vi = 0; vi < posAttr.count; vi++) {
+        const lx = posAttr.getX(vi);
+        const lz = posAttr.getZ(vi);
+        const wx = planUnderlay.offsetX + lx * cosR + lz * sinR;
+        const wz = planUnderlay.offsetZ - lx * sinR + lz * cosR;
+        const wy = sampleTerrainDeltaY(wx, wz, terrainCfg) + 0.08;
+        posAttr.setXYZ(vi, wx, wy, wz);
+      }
+      sheetGeo.computeVertexNormals();
+
+      const tex = new THREE.TextureLoader().load(planUnderlay.dataUrl);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+
+      const sheetMat = new THREE.MeshStandardMaterial({
+        map: tex,
+        roughness: 0.92,
+        metalness: 0.02,
+        transparent: planUnderlay.opacity < 0.99,
+        opacity: planUnderlay.opacity,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+      });
+      const sheetMesh = new THREE.Mesh(sheetGeo, sheetMat);
+      sheetMesh.receiveShadow = true;
+      massRoot.add(sheetMesh);
+    }
+
+    // A3) Mimarın Doğrudan Sürükleyip Bıraktığı 3D Model (.OBJ, .GLB, .FBX, .DAE, .STL, .PLY)
+    if (imported3DModel) {
+      const modelHolder = new THREE.Group();
+      const cloned = imported3DModel.group.clone(true);
+      if (imported3DModel.flipYZ) {
+        cloned.rotation.x = -Math.PI / 2;
+      }
+      const effScale = Math.max(0.0001, imported3DModel.unitScale * imported3DModel.customMultiplier);
+      cloned.scale.setScalar(effScale);
+      cloned.rotation.y = (-imported3DModel.rotationDeg * Math.PI) / 180;
+
+      modelHolder.add(cloned);
+      modelHolder.updateMatrixWorld(true);
+
+      const bbox = new THREE.Box3().setFromObject(modelHolder);
+      const bCenter = new THREE.Vector3();
+      const bSize = new THREE.Vector3();
+      bbox.getCenter(bCenter);
+      bbox.getSize(bSize);
+
+      // Modelin taban köşelerine göre eğimli araziye subasman bazası oluştur
+      const hw = Math.max(1, bSize.x / 2);
+      const hd = Math.max(1, bSize.z / 2);
+      const cPts = [
+        [imported3DModel.offsetX - hw, imported3DModel.offsetZ - hd],
+        [imported3DModel.offsetX + hw, imported3DModel.offsetZ - hd],
+        [imported3DModel.offsetX + hw, imported3DModel.offsetZ + hd],
+        [imported3DModel.offsetX - hw, imported3DModel.offsetZ + hd],
+      ];
+      let minCY = Infinity;
+      let maxCY = -Infinity;
+      for (const [cx, cz] of cPts) {
+        const cy = sampleTerrainDeltaY(cx, cz, terrainCfg);
+        if (cy < minCY) minCY = cy;
+        if (cy > maxCY) maxCY = cy;
+      }
+
+      const targetGroundY = maxCY + 0.15;
+      const plinthH = Math.max(0.45, targetGroundY - (minCY - 1.5));
+      const plinth = new THREE.Mesh(
+        new THREE.BoxGeometry(bSize.x * 0.96, plinthH, bSize.z * 0.96),
+        new THREE.MeshStandardMaterial({ color: 0x8c877e, roughness: 0.9 })
+      );
+      plinth.position.set(
+        imported3DModel.offsetX,
+        targetGroundY - plinthH / 2,
+        imported3DModel.offsetZ
+      );
+      plinth.castShadow = true;
+      plinth.receiveShadow = true;
+      massRoot.add(plinth);
+
+      modelHolder.position.set(
+        imported3DModel.offsetX - bCenter.x,
+        targetGroundY - bbox.min.y,
+        imported3DModel.offsetZ - bCenter.z
+      );
+      massRoot.add(modelHolder);
+    }
+
+    const showProceduralBlocks = !(imported3DModel && imported3DModel.hideGeneratedBlocks);
+
     // Avlu peyzaj zemini ve mimari ağaçlar
     const hasExplicitSadirvanOrPool = blocks.some(
       (b) => b.specialFeature === 'sadirvan' || b.specialFeature === 'outdoor_pool'
     );
-    if (courtyardAreaM2 >= 60) {
+    if (showProceduralBlocks && !planUnderlay && courtyardAreaM2 >= 60) {
       const centerTerrY = sampleTerrainDeltaY(0, 0, terrainCfg);
       const cSize = Math.min(22, Math.sqrt(courtyardAreaM2) * 0.65);
       const lawnGeo = new THREE.BoxGeometry(cSize, 0.7, cSize * 0.85);
@@ -864,7 +975,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
 
     // Her bir 3D Kütle Bloğu, Özel Mimari Elemanlar ve Parametrik Çatısı
-    for (const b of blocks) {
+    for (const b of showProceduralBlocks ? blocks : []) {
       const halfW = b.width / 2;
       const halfD = b.depth / 2;
       const cornerOffsets = [
@@ -1321,6 +1432,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     nativeSlopePct,
     effectiveSlopePct,
     soilClass,
+    planUnderlay,
+    imported3DModel,
   ]);
 
   // 3. Güneş Yörüngesi Kubbesi, Anlık Güneş Işığı Gölgesi ve Mevsimsel Rüzgar Akışı
@@ -1617,11 +1730,40 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         </div>
       </div>
 
-      {/* Three.js 3D Tuval (Gerçek Eğimli Zemin + Yeraltı Kesiti + Bina Kütleleri) */}
+      {/* Three.js 3D Tuval + Doğrudan Proje Dosyası Sürükle-Bırak Desteği */}
       <div
-        ref={containerRef}
-        className="w-full h-[380px] sm:h-[420px] cursor-grab active:cursor-grabbing bg-[#EAE7DF]"
-      />
+        className="relative w-full"
+        onDragOver={(e) => {
+          if (!onDropProjectFile) return;
+          e.preventDefault();
+          setIsDraggingFile(true);
+        }}
+        onDragLeave={() => setIsDraggingFile(false)}
+        onDrop={(e) => {
+          if (!onDropProjectFile) return;
+          e.preventDefault();
+          setIsDraggingFile(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f) onDropProjectFile(f);
+        }}
+      >
+        <div
+          ref={containerRef}
+          className="w-full h-[380px] sm:h-[430px] cursor-grab active:cursor-grabbing bg-[#EAE7DF]"
+        />
+
+        {isDraggingFile && (
+          <div className="pointer-events-none absolute inset-0 bg-[#181816]/80 border-4 border-dashed border-[#C85A17] flex flex-col items-center justify-center text-white p-6 text-center z-20">
+            <FileUp className="w-10 h-10 text-[#C85A17] mb-2" />
+            <div className="text-base font-bold">
+              Proje Dosyanızı Doğrudan 3D Araziye Bırakın
+            </div>
+            <div className="text-xs text-stone-300 mt-1">
+              PDF Pafta (.pdf) · AutoCAD (.dxf) · 3D Model (.obj, .glb, .gltf, .fbx, .dae, .stl) · Kat Planı Görseli (.png, .jpg, .svg)
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Alt Bilgi ve Renk Anlamları Çubuğu (Tuvalin Altında — Sıfır Çakışma) */}
       <div className="px-3.5 py-2.5 bg-[#FAF9F6] border-t border-stone-200 space-y-2 text-xs">

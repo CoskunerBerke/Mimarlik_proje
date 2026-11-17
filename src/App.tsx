@@ -43,19 +43,31 @@ import {
 import { SiteMapPicker } from './components/SiteMapPicker';
 import { TerrainSoil3DBlock } from './components/TerrainSoil3DBlock';
 import { Viewport3D } from './components/Viewport3D';
+import { InteractiveBuildingDesigner } from './components/InteractiveBuildingDesigner';
+import {
+  createSampleProjectFile,
+  importArchitectProjectFile,
+  Imported3DModelData,
+  PlanUnderlayData,
+  renderPdfProjectPage,
+} from './engine/projectFileImporter';
 import {
   Box,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Compass,
+  Copy,
   Download,
   ExternalLink,
+  FileUp,
   Layers,
   Loader2,
   MapPin,
   Mountain,
+  PenTool,
   Plus,
+  RotateCcw,
   Search,
   ShieldCheck,
   Sliders,
@@ -63,7 +75,10 @@ import {
   Trash2,
   Truck,
   Wind,
+  X,
 } from 'lucide-react';
+
+export type StudioDesignMode = 'auto' | 'upload' | 'custom_build';
 
 const DEFAULT_SITE: SiteParameters = {
   parcelWidthM: 68,
@@ -171,8 +186,14 @@ export const App: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [bundle, setBundle] = useState<VerifiedSiteBundle | null>(null);
 
-  // 3D Simülasyon Durumu
+  // 3D Simülasyon, Proje Dosyası Yükleme ve Kendi Binanı Tasarlama Durumu
   const [show3DStudio, setShow3DStudio] = useState(true);
+  const [studioMode, setStudioMode] = useState<StudioDesignMode>('auto');
+  const [planUnderlay, setPlanUnderlay] = useState<PlanUnderlayData | null>(null);
+  const [imported3DModel, setImported3DModel] = useState<Imported3DModelData | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+
   const [season, setSeason] = useState<SeasonKey>('summer');
   const [solarHour, setSolarHour] = useState<number>(13.0);
   const [activeTypologyKey, setActiveTypologyKey] = useState<MassTypologyKey>('u_court');
@@ -203,9 +224,9 @@ export const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [locationText, lockedLocation]);
 
-  // Bina türü, metrekare veya kullanıcının yazdığı bina özelliği değiştiğinde 3D binayı ANINDA yenile!
+  // Otomatik moddayken bina türü, metrekare veya açıklama değiştiğinde 3D binayı ANINDA yenile!
   useEffect(() => {
-    if (!bundle) return;
+    if (!bundle || studioMode !== 'auto') return;
     const generated = buildRealisticArchitecturalMassing(
       funcKey,
       bundle.cityProfile,
@@ -217,12 +238,69 @@ export const App: React.FC = () => {
     setGeneratedOrientationDeg(generated.orientationDeg);
     setAppliedPromptNotes(generated.appliedNotes);
     setSelectedBlockId(generated.blocks[0]?.id ?? null);
-  }, [bundle, funcKey, targetAreaM2, userBuildingPrompt]);
+  }, [bundle, funcKey, targetAreaM2, userBuildingPrompt, studioMode]);
 
   const handleSelectFunction = (nextKey: BuildingFunctionKey) => {
     setFuncKey(nextKey);
     setTargetAreaM2(DEFAULT_AREA_BY_FUNCTION[nextKey] ?? 3000);
     setUserBuildingPrompt('');
+    if (studioMode !== 'upload') {
+      setStudioMode('auto');
+    }
+  };
+
+  const handleProjectFileDrop = async (file: File) => {
+    setImportLoading(true);
+    setImportError(null);
+    try {
+      const res = await importArchitectProjectFile(file);
+      setShow3DStudio(true);
+      if (res.kind === 'underlay') {
+        setPlanUnderlay(res.underlay);
+        setStudioMode('upload');
+        if (res.underlay.suggestedAreaM2) {
+          setTargetAreaM2(res.underlay.suggestedAreaM2);
+        }
+        if (res.underlay.extractedDxfBlocks && res.underlay.extractedDxfBlocks.length > 0) {
+          setBlocks(res.underlay.extractedDxfBlocks);
+          setSelectedBlockId(res.underlay.extractedDxfBlocks[0]?.id ?? null);
+        }
+      } else if (res.kind === 'model3d') {
+        setImported3DModel(res.model);
+        setStudioMode('upload');
+      } else if (res.kind === 'blocks_json') {
+        setBlocks(res.blocks);
+        setSelectedBlockId(res.blocks[0]?.id ?? null);
+        setStudioMode('custom_build');
+      }
+    } catch (err) {
+      setImportError(
+        err instanceof Error ? err.message : 'Proje dosyası okunurken bir hata oluştu.'
+      );
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handlePdfPageSwitch = async (nextPage: number) => {
+    if (!planUnderlay || planUnderlay.fileKind !== 'pdf' || !planUnderlay.rawFile) return;
+    setImportLoading(true);
+    setImportError(null);
+    try {
+      const updated = await renderPdfProjectPage(planUnderlay.rawFile, nextPage);
+      setPlanUnderlay({
+        ...updated,
+        widthM: planUnderlay.widthM,
+        offsetX: planUnderlay.offsetX,
+        offsetZ: planUnderlay.offsetZ,
+        rotationDeg: planUnderlay.rotationDeg,
+        opacity: planUnderlay.opacity,
+      });
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'PDF sayfası değiştirilemedi.');
+    } finally {
+      setImportLoading(false);
+    }
   };
 
   const handleMapPinPick = async (lat: number, lng: number) => {
@@ -307,18 +385,21 @@ export const App: React.FC = () => {
         setActiveTypologyKey(recs[0].key);
       }
 
-      // Seçilen bina türüne (Cami, Lise, Villa, Hastane vb.) ve açıklamaya özel gerçekçi 3D model kur
-      const generated = buildRealisticArchitecturalMassing(
-        funcKey,
-        verified.cityProfile,
-        targetAreaM2,
-        userBuildingPrompt
-      );
-      setBlocks(generated.blocks);
-      setGeneratedCourtyardM2(generated.courtyardAreaM2);
-      setGeneratedOrientationDeg(generated.orientationDeg);
-      setAppliedPromptNotes(generated.appliedNotes);
-      setSelectedBlockId(generated.blocks[0]?.id ?? null);
+      if (studioMode === 'auto' || blocks.length === 0) {
+        const generated = buildRealisticArchitecturalMassing(
+          funcKey,
+          verified.cityProfile,
+          targetAreaM2,
+          userBuildingPrompt
+        );
+        if (studioMode !== 'custom_build') {
+          setBlocks(generated.blocks);
+          setSelectedBlockId(generated.blocks[0]?.id ?? null);
+        }
+        setGeneratedCourtyardM2(generated.courtyardAreaM2);
+        setGeneratedOrientationDeg(generated.orientationDeg);
+        setAppliedPromptNotes(generated.appliedNotes);
+      }
     } catch (err) {
       setErrorMsg(
         err instanceof Error ? err.message : 'Analiz sırasında beklenmeyen bir hata oluştu.'
@@ -788,9 +869,62 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
             </p>
           </div>
 
-          {errorMsg && (
+          {/* 4. İSTEĞE BAĞLI: HAZIR PROJE SÜRÜKLE-BIRAK (PDF / CAD / 3D) VEYA SIFIRDAN ÇİZİM SEÇİMİ */}
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const f = e.dataTransfer.files?.[0];
+              if (f) handleProjectFileDrop(f);
+            }}
+            className="border border-dashed border-stone-400 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+          >
+            <div className="space-y-0.5">
+              <div className="font-bold text-[#181816] flex items-center gap-1.5">
+                <FileUp className="w-4 h-4 text-[#C85A17]" />
+                Hazır Projeniz mi Var Yoksa Kendi Binanızı Kendiniz mi Yapmak İstiyorsunuz?
+              </div>
+              <div className="text-stone-600">
+                {planUnderlay
+                  ? `✓ Yüklü Plan/Pafta: ${planUnderlay.fileName}`
+                  : imported3DModel
+                  ? `✓ Yüklü 3D Model: ${imported3DModel.fileName}`
+                  : 'Mimarın PDF paftasını (.pdf), AutoCAD (.dxf), SketchUp/Revit/Rhino 3D modelini (.obj, .glb, .fbx, .stl) buraya sürükleyebilir veya analizden sonra kendi binanızı sıfırdan çizebilirsiniz.'}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <label className="px-3 py-1.5 bg-[#FAF9F6] hover:bg-stone-100 border border-stone-300 font-semibold cursor-pointer whitespace-nowrap">
+                {importLoading ? 'Okunuyor...' : 'Proje Dosyası Seç (PDF/CAD/3D)'}
+                <input
+                  type="file"
+                  accept=".pdf,.dxf,.glb,.gltf,.obj,.fbx,.dae,.stl,.ply,.png,.jpg,.jpeg,.webp,.svg,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleProjectFileDrop(f);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() => setStudioMode('custom_build')}
+                className={`px-3 py-1.5 border font-semibold whitespace-nowrap flex items-center gap-1 ${
+                  studioMode === 'custom_build'
+                    ? 'bg-[#181816] text-white border-[#181816]'
+                    : 'bg-white hover:bg-stone-50 text-[#181816] border-stone-300'
+                }`}
+              >
+                <PenTool className="w-3.5 h-3.5 text-[#C85A17]" /> Kendi Binamı Çizeceğim
+              </button>
+            </div>
+          </div>
+
+          {(errorMsg || importError) && (
             <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 text-xs sm:text-sm">
-              {errorMsg}
+              {errorMsg || importError}
             </div>
           )}
 
@@ -807,7 +941,7 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
                 Tam Arsa Koordinatı İçin Uydu, ERA5 İklim ve Zemin Verileri Sorgulanıyor...
               </>
             ) : (
-              'Gerçek Verilerle Araziyi Analiz Et ve 3D Binayı Yerleştir'
+              'Gerçek Verilerle Araziyi Analiz Et ve 3D Sahneyi Aç'
             )}
           </button>
         </section>
@@ -821,8 +955,32 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
             funcKey={funcKey}
             customFuncTitle={customFuncTitle}
             targetAreaM2={targetAreaM2}
+            studioMode={studioMode}
+            setStudioMode={setStudioMode}
+            planUnderlay={planUnderlay}
+            setPlanUnderlay={setPlanUnderlay}
+            imported3DModel={imported3DModel}
+            setImported3DModel={setImported3DModel}
+            importLoading={importLoading}
+            importError={importError}
+            onDropProjectFile={handleProjectFileDrop}
+            onSwitchPdfPage={handlePdfPageSwitch}
+            onResetToAutoBuilding={() => {
+              setStudioMode('auto');
+              const generated = buildRealisticArchitecturalMassing(
+                funcKey,
+                bundle.cityProfile,
+                targetAreaM2,
+                userBuildingPrompt
+              );
+              setBlocks(generated.blocks);
+              setSelectedBlockId(generated.blocks[0]?.id ?? null);
+            }}
             userBuildingPrompt={userBuildingPrompt}
-            setUserBuildingPrompt={setUserBuildingPrompt}
+            setUserBuildingPrompt={(val) => {
+              setStudioMode('auto');
+              setUserBuildingPrompt(val);
+            }}
             appliedPromptNotes={appliedPromptNotes}
             generatedCourtyardM2={generatedCourtyardM2}
             generatedOrientationDeg={generatedOrientationDeg}
@@ -832,6 +990,7 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
             recommendations={recommendations}
             activeTypologyKey={activeTypologyKey}
             onSelectTypology={(key) => {
+              setStudioMode('auto');
               setActiveTypologyKey(key);
               if (key === 'l_shield') {
                 setUserBuildingPrompt('L şeklinde rüzgar korunaklı avlulu yerleşim');
@@ -873,6 +1032,17 @@ interface ReportSectionsProps {
   funcKey: BuildingFunctionKey;
   customFuncTitle: string;
   targetAreaM2: number;
+  studioMode: StudioDesignMode;
+  setStudioMode: (m: StudioDesignMode) => void;
+  planUnderlay: PlanUnderlayData | null;
+  setPlanUnderlay: React.Dispatch<React.SetStateAction<PlanUnderlayData | null>>;
+  imported3DModel: Imported3DModelData | null;
+  setImported3DModel: React.Dispatch<React.SetStateAction<Imported3DModelData | null>>;
+  importLoading: boolean;
+  importError: string | null;
+  onDropProjectFile: (file: File) => void;
+  onSwitchPdfPage: (page: number) => void;
+  onResetToAutoBuilding: () => void;
   userBuildingPrompt: string;
   setUserBuildingPrompt: (v: string) => void;
   appliedPromptNotes: string[];
@@ -899,11 +1069,32 @@ interface ReportSectionsProps {
   setExportTrigger: React.Dispatch<React.SetStateAction<number>>;
 }
 
+const FACADE_SWATCHES: Array<{ label: string; hex: string; glazing?: MassBlock['glazingStyle'] }> = [
+  { label: 'Doğal Kalker Taşı', hex: '#EAE3D2', glazing: 'punched' },
+  { label: 'Pişmiş Toprak / Tuğla', hex: '#B65E45', glazing: 'punched' },
+  { label: 'Doğal Yapısal Ahşap', hex: '#C19363', glazing: 'punched' },
+  { label: 'Modern Beyaz Sıva', hex: '#F5F4F0', glazing: 'punched' },
+  { label: 'Koyu Bazalt Taşı', hex: '#57534E', glazing: 'punched' },
+  { label: 'Giydirme Cam Cephe', hex: '#CBD5E1', glazing: 'curtain_wall' },
+  { label: 'Kemerli Anıtsal Taş', hex: '#E8E0CF', glazing: 'arched_classic' },
+];
+
 const ReportSections: React.FC<ReportSectionsProps> = ({
   bundle,
   funcKey,
   customFuncTitle,
   targetAreaM2,
+  studioMode,
+  setStudioMode,
+  planUnderlay,
+  setPlanUnderlay,
+  imported3DModel,
+  setImported3DModel,
+  importLoading,
+  importError,
+  onDropProjectFile,
+  onSwitchPdfPage,
+  onResetToAutoBuilding,
   userBuildingPrompt,
   setUserBuildingPrompt,
   appliedPromptNotes,
@@ -937,14 +1128,13 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   const displayProgTitle =
     funcKey === 'custom' && customFuncTitle.trim() ? customFuncTitle.trim() : prog.title;
 
-  // Özet haritasında kullanıcı pini yan parsele kaydırırsa tek tıkla güncelleme durumu
   const [adjustedPin, setAdjustedPin] = useState<{ lat: number; lng: number } | null>(null);
+  const [dropHover, setDropHover] = useState(false);
 
   useEffect(() => {
     setAdjustedPin(null);
   }, [city.lat, city.lng]);
 
-  // Parselde güncel saha/plankote veya sondajlı zemin etüdü varsa üzerine yazma (override) desteği
   const [showFieldOverride, setShowFieldOverride] = useState(false);
   const [overrideSoilClass, setOverrideSoilClass] = useState<'AUTO' | 'ZB' | 'ZC' | 'ZD' | 'ZE'>(
     'AUTO'
@@ -971,9 +1161,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
 
   const activeRec =
     recommendations.find((r) => r.key === activeTypologyKey) || recommendations[0];
-  const currentBlocks = blocks.length > 0 ? blocks : activeRec.blocks;
-  const activeBlock =
-    currentBlocks.find((b) => b.id === selectedBlockId) || currentBlocks[0];
+  const currentBlocks = blocks;
+  const activeBlock: MassBlock | null =
+    currentBlocks.find((b) => b.id === selectedBlockId) || currentBlocks[0] || null;
+  const fallbackRoofRefBlock = activeBlock ?? activeRec.blocks[0];
 
   const solarSum = getSeasonalSolarSummary(
     city.lat,
@@ -984,8 +1175,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   const summerShadow = calculateSolarPosition(city.lat, 172, 12).shadowMultiplier;
   const winterShadow = calculateSolarPosition(city.lat, 355, 12).shadowMultiplier;
 
-  const optRoof = recommendOptimalRoofForBlock(activeBlock, city, funcKey);
-  const roofPerf = analyzeBlockRoofPerformance(activeBlock, city);
+  const optRoof = recommendOptimalRoofForBlock(fallbackRoofRefBlock, city, funcKey);
+  const roofPerf = analyzeBlockRoofPerformance(fallbackRoofRefBlock, city);
 
   const minBuildingTons = Math.round(
     (effectiveMassCalc.recommendedUnitMassKgM2.min * targetAreaM2) / 1000
@@ -994,6 +1185,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
     (effectiveMassCalc.recommendedUnitMassKgM2.max * targetAreaM2) / 1000
   );
   const heavyBuildingTons = Math.round((sm.conventionalConcreteMassKgM2 * targetAreaM2) / 1000);
+  const avgUnitMassKgM2 = Math.round(
+    (effectiveMassCalc.recommendedUnitMassKgM2.min + effectiveMassCalc.recommendedUnitMassKgM2.max) /
+      2
+  );
 
   const activeWallColor =
     evaluatedMaterials.find((e) => e.material.id === recommendedMaterialsMap.envelope_wall)
@@ -1003,6 +1198,11 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       ?.material.colorHex ?? '#334155';
 
   const activePresets = FUNCTION_DESIGN_PRESETS[funcKey] ?? [];
+
+  const updateActiveBlock = (patch: Partial<MassBlock>) => {
+    if (!activeBlock) return;
+    setBlocks((prev) => prev.map((b) => (b.id === activeBlock.id ? { ...b, ...patch } : b)));
+  };
 
   return (
     <div className="space-y-8">
@@ -1025,7 +1225,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </div>
         </div>
 
-        {/* Sade Dil Özeti: Bu Arsada Ne Yapılmalı? */}
+        {/* Sade Dil Özeti */}
         <div className="bg-[#FAF9F5] border border-stone-200 p-4 sm:p-5 space-y-2.5 text-sm leading-relaxed text-stone-800">
           <div className="font-bold text-[#181816]">
             Kısaca Bu Arsaya Nasıl Bir {displayProgTitle} Yapılmalı?
@@ -1060,16 +1260,16 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
           </p>
           <p>
             <strong>3. Mimari Kütle, Avlu ve Çatı:</strong> <strong>{displayProgTitle}</strong> için
-            oluşturulan mimari yerleşim ({generatedCourtyardM2} m² açık/avlu alanı,{' '}
-            <strong>{currentBlocks.length} özel mimari kütle</strong>) ve ana çatıda{' '}
+            önerilen yerleşim ({generatedCourtyardM2} m² açık/avlu alanı) ve üst örtüde{' '}
             <strong>
-              {ROOF_TYPES_META[activeBlock.roofType].shortName} ({activeBlock.roofPitchDeg}°)
+              {ROOF_TYPES_META[fallbackRoofRefBlock.roofType].shortName} (
+              {fallbackRoofRefBlock.roofPitchDeg}°)
             </strong>{' '}
             ile iklim ve fonksiyon dengelenmiştir.
           </p>
         </div>
 
-        {/* Doğrulanmış Uydu Haritası: Kullanıcı isterse buradan da tam parselini tıklayıp kaydırabilir */}
+        {/* Doğrulanmış Uydu Haritası */}
         <div className="space-y-2">
           <SiteMapPicker
             lat={adjustedPin ? adjustedPin.lat : city.lat}
@@ -1101,7 +1301,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
       </section>
 
       {/* ===================================================================== */}
-      {/* BÖLÜM 5'İ ÜSTE YAKINLAŞTIRILMIŞ GERÇEKÇİ 3D BİNA VE ÖZELLEŞTİRME      */}
+      {/* 3 MODLU GERÇEKÇİ 3D STÜDYO: OTOMATİK / PROJE YÜKLE / KENDİ BİNANI YAP */}
       {/* ===================================================================== */}
       <section className="bg-white border border-stone-200">
         <button
@@ -1111,10 +1311,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
         >
           <div>
             <span className="font-mono text-xs font-bold text-[#C85A17]">
-              GERÇEKÇİ 3D MİMARİ MODEL · {displayProgTitle.toUpperCase()}
+              GERÇEKÇİ 3D MİMARİ STÜDYO · PROJE YÜKLE VEYA KENDİ BİNANI TASARLA
             </span>
             <h3 className="text-base sm:text-lg font-bold text-[#181816] mt-0.5">
-              {displayProgTitle} 3D Yerleşimi, Bina Özelliklerini Yazarak Değiştirme ve Güneş Testi
+              3D Bina Yerleşimi, PDF / CAD / 3D Proje Sürükleme ve Sıfırdan Kendi Binanı Yapma Alanı
             </h3>
           </div>
           {show3DStudio ? (
@@ -1126,65 +1326,498 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
 
         {show3DStudio && (
           <div className="p-6 pt-3 border-t border-stone-200 space-y-5">
-            {/* Canlı Bina Özelleştirme Çubuğu (3D Ekranın Hemen Üstünde!) */}
-            <div className="bg-[#FAF9F6] border border-stone-300 p-3.5 space-y-2.5 text-xs">
-              <div className="font-bold text-[#181816] flex items-center justify-between gap-2">
-                <span>
-                  Nasıl Bir {displayProgTitle} İstiyorsunuz? (Aşağıdan Seçin veya Yazın — 3D Model
-                  Anında Değişir)
-                </span>
-                {userBuildingPrompt.trim() !== '' && (
-                  <button
-                    type="button"
-                    onClick={() => setUserBuildingPrompt('')}
-                    className="text-stone-500 underline font-normal"
-                  >
-                    Sıfırla
-                  </button>
+            {/* 3 NET TASARIM MODU SEKMESİ */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setStudioMode('auto')}
+                className={`p-3 text-left border transition ${
+                  studioMode === 'auto'
+                    ? 'bg-[#181816] text-white border-[#181816]'
+                    : 'bg-[#FAF9F6] text-[#181816] border-stone-300 hover:bg-stone-100'
+                }`}
+              >
+                <div className="font-mono text-[11px] font-bold text-[#C85A17]">MOD 01</div>
+                <div className="text-xs font-bold mt-0.5">Otomatik / Yazarak Öner</div>
+                <div
+                  className={`text-[11px] mt-0.5 ${
+                    studioMode === 'auto' ? 'text-stone-300' : 'text-stone-500'
+                  }`}
+                >
+                  Hazır tipler veya Türkçe tarif ile kur
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStudioMode('upload')}
+                className={`p-3 text-left border transition ${
+                  studioMode === 'upload'
+                    ? 'bg-[#181816] text-white border-[#181816]'
+                    : 'bg-[#FAF9F6] text-[#181816] border-stone-300 hover:bg-stone-100'
+                }`}
+              >
+                <div className="font-mono text-[11px] font-bold text-[#C85A17]">MOD 02</div>
+                <div className="text-xs font-bold mt-0.5">
+                  Mimarın Projesini Sürükle (PDF / CAD / 3D)
+                </div>
+                <div
+                  className={`text-[11px] mt-0.5 ${
+                    studioMode === 'upload' ? 'text-stone-300' : 'text-stone-500'
+                  }`}
+                >
+                  .PDF, .DXF, .OBJ, .GLB, .FBX, .STL, Görsel
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStudioMode('custom_build')}
+                className={`p-3 text-left border transition ${
+                  studioMode === 'custom_build'
+                    ? 'bg-[#181816] text-white border-[#181816]'
+                    : 'bg-[#FAF9F6] text-[#181816] border-stone-300 hover:bg-stone-100'
+                }`}
+              >
+                <div className="font-mono text-[11px] font-bold text-[#C85A17]">MOD 03</div>
+                <div className="text-xs font-bold mt-0.5">
+                  Projesi Olmayanlar: Kendi Binanı Yap
+                </div>
+                <div
+                  className={`text-[11px] mt-0.5 ${
+                    studioMode === 'custom_build' ? 'text-stone-300' : 'text-stone-500'
+                  }`}
+                >
+                  Kareli arsada çiz, kat/çatı/balkon ekle
+                </div>
+              </button>
+            </div>
+
+            {/* MOD 01 PANELİ: OTOMATİK / YAZARAK BİNA OLUŞTURMA */}
+            {studioMode === 'auto' && (
+              <div className="bg-[#FAF9F6] border border-stone-300 p-3.5 space-y-2.5 text-xs">
+                <div className="font-bold text-[#181816] flex items-center justify-between gap-2">
+                  <span>
+                    Nasıl Bir {displayProgTitle} İstiyorsunuz? (Seçin veya Yazın — 3D Model Anında
+                    Değişir)
+                  </span>
+                  {userBuildingPrompt.trim() !== '' && (
+                    <button
+                      type="button"
+                      onClick={() => setUserBuildingPrompt('')}
+                      className="text-stone-500 underline font-normal"
+                    >
+                      Sıfırla
+                    </button>
+                  )}
+                </div>
+
+                {activePresets.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {activePresets.map((preset) => {
+                      const isActive = userBuildingPrompt.trim() === preset.promptText.trim();
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => setUserBuildingPrompt(preset.promptText)}
+                          className={`px-2.5 py-1 font-semibold border transition ${
+                            isActive
+                              ? 'bg-[#181816] text-white border-[#181816]'
+                              : 'bg-white text-stone-700 border-stone-300 hover:border-[#181816]'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <input
+                  type="text"
+                  value={userBuildingPrompt}
+                  onChange={(e) => setUserBuildingPrompt(e.target.value)}
+                  placeholder={
+                    PROMPT_PLACEHOLDER_BY_FUNCTION[funcKey] ??
+                    'Örn: 4 katlı, L şeklinde, spor salonlu, taş veya tuğla cepheli bina...'
+                  }
+                  className="w-full bg-white border border-stone-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-[#181816]"
+                />
+
+                {appliedPromptNotes.length > 0 && (
+                  <div className="text-[11px] text-[#15803D] font-medium flex flex-wrap gap-x-3 gap-y-1">
+                    {appliedPromptNotes.map((note, idx) => (
+                      <span key={idx}>✓ {note}</span>
+                    ))}
+                  </div>
                 )}
               </div>
+            )}
 
-              {activePresets.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {activePresets.map((preset) => {
-                    const isActive = userBuildingPrompt.trim() === preset.promptText.trim();
-                    return (
+            {/* MOD 02 PANELİ: MİMARIN PROJESİNİ SÜRÜKLE-BIRAK (PDF / DXF / 3D / GÖRSEL) */}
+            {studioMode === 'upload' && (
+              <div className="bg-[#FAF9F6] border border-stone-300 p-4 space-y-4 text-xs">
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDropHover(true);
+                  }}
+                  onDragLeave={() => setDropHover(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDropHover(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) onDropProjectFile(f);
+                  }}
+                  className={`border-2 border-dashed p-5 text-center transition ${
+                    dropHover
+                      ? 'border-[#C85A17] bg-amber-50/60'
+                      : 'border-stone-400 bg-white hover:border-[#181816]'
+                  }`}
+                >
+                  <FileUp className="w-7 h-7 text-[#C85A17] mx-auto mb-2" />
+                  <div className="text-sm font-bold text-[#181816]">
+                    {importLoading
+                      ? 'Proje Dosyası Çözümleniyor ve 3D Araziye Oturtuluyor...'
+                      : 'Mimarın Proje Dosyasını Buraya Sürükleyip Bırakın'}
+                  </div>
+                  <p className="text-stone-600 mt-1 max-w-xl mx-auto leading-relaxed">
+                    <strong>Desteklenen Tüm Mimari Formatlar:</strong> Vaziyet / Kat Planı Paftası (
+                    <strong>.PDF</strong>), AutoCAD Çizimi (<strong>.DXF</strong>), SketchUp / Revit
+                    / Rhino / ArchiCAD / Blender 3D Modeli (
+                    <strong>.OBJ, .GLB, .GLTF, .FBX, .DAE, .STL, .PLY</strong>), Plan Görseli (
+                    <strong>.PNG, .JPG, .SVG</strong>) veya Kayıtlı Proje (<strong>.JSON</strong>)
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    <label className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#181816] hover:bg-stone-800 text-white font-bold cursor-pointer">
+                      <FileUp className="w-3.5 h-3.5" /> Bilgisayardan Proje Dosyası Seç
+                      <input
+                        type="file"
+                        accept=".pdf,.dxf,.glb,.gltf,.obj,.fbx,.dae,.stl,.ply,.png,.jpg,.jpeg,.webp,.svg,.json"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) onDropProjectFile(f);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="mt-3 pt-2.5 border-t border-stone-200 flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
+                    <span className="text-stone-500">Dosyanız yanınızda değilse örneklerle deneyin:</span>
+                    <button
+                      type="button"
+                      onClick={() => onDropProjectFile(createSampleProjectFile('pdf'))}
+                      className="px-2 py-1 bg-[#FAF9F6] hover:bg-stone-200 border border-stone-300 font-semibold"
+                    >
+                      Örnek PDF Pafta Yükle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDropProjectFile(createSampleProjectFile('dxf'))}
+                      className="px-2 py-1 bg-[#FAF9F6] hover:bg-stone-200 border border-stone-300 font-semibold"
+                    >
+                      Örnek AutoCAD (.DXF) Yükle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDropProjectFile(createSampleProjectFile('obj'))}
+                      className="px-2 py-1 bg-[#FAF9F6] hover:bg-stone-200 border border-stone-300 font-semibold"
+                    >
+                      Örnek 3D Maket (.OBJ) Yükle
+                    </button>
+                  </div>
+                </div>
+
+                {importError && (
+                  <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2">
+                    {importError}
+                  </div>
+                )}
+
+                {/* Yüklenen 2D Plan Altlığı (PDF / DXF / Görsel) Ayarları */}
+                {planUnderlay && (
+                  <div className="bg-white border border-stone-300 p-3.5 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 pb-2">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase text-[#15803D]">
+                          ✓ 3D Arazi Zeminine Serilen Plan / Pafta
+                        </span>
+                        <div className="font-bold text-sm text-[#181816]">
+                          {planUnderlay.fileName}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {planUnderlay.fileKind === 'pdf' &&
+                          (planUnderlay.pdfPageCount ?? 1) > 1 && (
+                            <div className="flex items-center gap-1">
+                              <span>Sayfa:</span>
+                              <select
+                                value={planUnderlay.pdfCurrentPage ?? 1}
+                                onChange={(e) => onSwitchPdfPage(Number(e.target.value))}
+                                className="bg-[#FAF9F6] border border-stone-300 px-2 py-1 font-bold"
+                              >
+                                {Array.from(
+                                  { length: planUnderlay.pdfPageCount ?? 1 },
+                                  (_, idx) => idx + 1
+                                ).map((pg) => (
+                                  <option key={pg} value={pg}>
+                                    {pg} / {planUnderlay.pdfPageCount}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                        <button
+                          type="button"
+                          onClick={() => setPlanUnderlay(null)}
+                          className="px-2 py-1 text-red-700 border border-stone-300 hover:bg-red-50 flex items-center gap-1"
+                        >
+                          <X className="w-3.5 h-3.5" /> Planı Kaldır
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 text-stone-700">
+                      {planUnderlay.extractedSummary.map((line, i) => (
+                        <div key={i}>• {line}</div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Planın Arsadaki Genişliği</span>
+                          <strong>{planUnderlay.widthM} m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={18}
+                          max={100}
+                          value={planUnderlay.widthM}
+                          onChange={(e) =>
+                            setPlanUnderlay((u) =>
+                              u ? { ...u, widthM: Number(e.target.value) } : u
+                            )
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Plan Yön Açısı</span>
+                          <strong>{planUnderlay.rotationDeg}°</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={-180}
+                          max={180}
+                          step={5}
+                          value={planUnderlay.rotationDeg}
+                          onChange={(e) =>
+                            setPlanUnderlay((u) =>
+                              u ? { ...u, rotationDeg: Number(e.target.value) } : u
+                            )
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Plan Görünürlüğü</span>
+                          <strong>%{Math.round(planUnderlay.opacity * 100)}</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={0.3}
+                          max={1}
+                          step={0.05}
+                          value={planUnderlay.opacity}
+                          onChange={(e) =>
+                            setPlanUnderlay((u) =>
+                              u ? { ...u, opacity: Number(e.target.value) } : u
+                            )
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
                       <button
-                        key={preset.id}
                         type="button"
-                        onClick={() => setUserBuildingPrompt(preset.promptText)}
-                        className={`px-2.5 py-1 font-semibold border transition ${
-                          isActive
-                            ? 'bg-[#181816] text-white border-[#181816]'
-                            : 'bg-white text-stone-700 border-stone-300 hover:border-[#181816]'
-                        }`}
+                        onClick={() => setStudioMode('custom_build')}
+                        className="px-3 py-2 bg-[#C85A17] hover:bg-amber-800 text-white font-bold flex items-center gap-1.5"
                       >
-                        {preset.label}
+                        <PenTool className="w-3.5 h-3.5" /> Bu Planın Üzerinden 3D Kütleleri Çiz /
+                        Düzenle
                       </button>
-                    );
-                  })}
-                </div>
-              )}
 
-              <input
-                type="text"
-                value={userBuildingPrompt}
-                onChange={(e) => setUserBuildingPrompt(e.target.value)}
-                placeholder={
-                  PROMPT_PLACEHOLDER_BY_FUNCTION[funcKey] ??
-                  'Örn: 4 katlı, L şeklinde, spor salonlu, taş veya tuğla cepheli bina...'
-                }
-                className="w-full bg-white border border-stone-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-[#181816]"
-              />
+                      {planUnderlay.suggestedFloors && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBlocks((prev) =>
+                              prev.map((b) => ({
+                                ...b,
+                                floors: planUnderlay.suggestedFloors ?? b.floors,
+                              }))
+                            );
+                          }}
+                          className="px-3 py-2 bg-white border border-stone-300 hover:border-[#181816] font-semibold"
+                        >
+                          Algılanan Kat Sayısını ({planUnderlay.suggestedFloors} Kat) 3D Binaya
+                          Uygula
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
-              {appliedPromptNotes.length > 0 && (
-                <div className="text-[11px] text-[#15803D] font-medium flex flex-wrap gap-x-3 gap-y-1">
-                  {appliedPromptNotes.map((note, idx) => (
-                    <span key={idx}>✓ {note}</span>
-                  ))}
+                {/* Yüklenen 3D Mimari Model (.OBJ, .GLB, .FBX, .DAE, .STL) Ayarları */}
+                {imported3DModel && (
+                  <div className="bg-white border border-stone-300 p-3.5 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 pb-2">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase text-[#15803D]">
+                          ✓ 3D Araziye Yerleştirilen Mimar Modeli ({imported3DModel.formatLabel})
+                        </span>
+                        <div className="font-bold text-sm text-[#181816]">
+                          {imported3DModel.fileName}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setImported3DModel(null)}
+                        className="px-2 py-1 text-red-700 border border-stone-300 hover:bg-red-50 flex items-center gap-1"
+                      >
+                        <X className="w-3.5 h-3.5" /> 3D Modeli Kaldır
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block mb-1 font-semibold">Çizim Birimi</label>
+                        <select
+                          value={String(imported3DModel.unitScale)}
+                          onChange={(e) =>
+                            setImported3DModel((m) =>
+                              m ? { ...m, unitScale: Number(e.target.value) } : m
+                            )
+                          }
+                          className="w-full bg-[#FAF9F6] border border-stone-300 px-2.5 py-1.5 font-semibold"
+                        >
+                          <option value="1">Metre (1 birim = 1m)</option>
+                          <option value="0.01">Santimetre (cm → m)</option>
+                          <option value="0.001">Milimetre (mm → m)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Ek Ölçek Çarpanı</span>
+                          <strong>×{imported3DModel.customMultiplier.toFixed(2)}</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={0.2}
+                          max={4}
+                          step={0.05}
+                          value={imported3DModel.customMultiplier}
+                          onChange={(e) =>
+                            setImported3DModel((m) =>
+                              m ? { ...m, customMultiplier: Number(e.target.value) } : m
+                            )
+                          }
+                          className="w-full"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Yönelim Açısı</span>
+                          <strong>{imported3DModel.rotationDeg}°</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={-180}
+                          max={180}
+                          step={5}
+                          value={imported3DModel.rotationDeg}
+                          onChange={(e) =>
+                            setImported3DModel((m) =>
+                              m ? { ...m, rotationDeg: Number(e.target.value) } : m
+                            )
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4 pt-1">
+                      <label className="flex items-center gap-1.5 cursor-pointer font-medium">
+                        <input
+                          type="checkbox"
+                          checked={imported3DModel.flipYZ}
+                          onChange={(e) =>
+                            setImported3DModel((m) =>
+                              m ? { ...m, flipYZ: e.target.checked } : m
+                            )
+                          }
+                        />
+                        Z-Yukarı Ekseni Çevir (AutoCAD / Rhino / Revit dikey düzeltme)
+                      </label>
+
+                      <label className="flex items-center gap-1.5 cursor-pointer font-medium">
+                        <input
+                          type="checkbox"
+                          checked={imported3DModel.hideGeneratedBlocks}
+                          onChange={(e) =>
+                            setImported3DModel((m) =>
+                              m ? { ...m, hideGeneratedBlocks: e.target.checked } : m
+                            )
+                          }
+                        />
+                        Yalnızca Kendi 3D Modelimi Göster (Öneri kütleleri gizle)
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* MOD 03 PANELİ: PROJESİ OLMAYANLAR İÇİN KENDİ BİNANI KENDİN YAP */}
+            {studioMode === 'custom_build' && (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-bold text-[#181816]">
+                    Kuşbakışı Arsa Üzerinde Kendi Binanızı Çizin veya Taşıyın (Aşağıdaki 3D Modelde
+                    Canlı Yükselir)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onResetToAutoBuilding}
+                    className="text-stone-600 hover:text-[#181816] underline flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Otomatik {displayProgTitle} Önerisine Geri Dön
+                  </button>
                 </div>
-              )}
-            </div>
+
+                <InteractiveBuildingDesigner
+                  site={DEFAULT_SITE}
+                  blocks={currentBlocks}
+                  setBlocks={setBlocks}
+                  selectedBlockId={activeBlock?.id ?? null}
+                  onSelectBlock={setSelectedBlockId}
+                  planUnderlay={planUnderlay}
+                  prevailingWindLabel={ce.annualWindRose[0]?.name ?? 'KD (Poyraz)'}
+                  recommendedUnitMassAvgKgM2={avgUnitMassKgM2}
+                />
+              </div>
+            )}
 
             {/* Mevsim, Saat ve Dışa Aktarma Kontrolleri */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-[#FAF9F6] border border-stone-200 p-3 text-xs">
@@ -1220,12 +1853,35 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
-                    const nextBlk: MassBlock = {
-                      ...activeBlock,
-                      id: `ek_${Date.now().toString().slice(-4)}`,
-                      label: `Ek Kütle #${currentBlocks.length + 1}`,
+                    const baseTemplate: MassBlock = activeBlock ?? {
+                      id: 'init',
+                      label: 'Yeni Bina Bloğu',
+                      role: 'primary_living',
                       x: 0,
                       z: 0,
+                      width: 16,
+                      depth: 11,
+                      floors: 3,
+                      floorHeight: 3.3,
+                      rotationDeg: 0,
+                      roofType: 'gable',
+                      roofPitchDeg: 22,
+                      secondaryPitchDeg: 85,
+                      overhangSouthM: 1.0,
+                      sawtoothCount: 3,
+                      skylightRatio: 0.25,
+                      ridgeDirection: 'EW',
+                      hasPvPanels: false,
+                      glazingStyle: 'punched',
+                      customWallHex: '#EAE3D2',
+                      customRoofHex: '#475569',
+                    };
+                    const nextBlk: MassBlock = {
+                      ...baseTemplate,
+                      id: `ek_${Date.now().toString().slice(-4)}`,
+                      label: `Bina Bloğu #${currentBlocks.length + 1}`,
+                      x: (currentBlocks.length % 3) * 4 - 4,
+                      z: (currentBlocks.length % 2) * 5,
                       specialFeature: undefined,
                     };
                     setBlocks([...currentBlocks, nextBlk]);
@@ -1233,7 +1889,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                   }}
                   className="px-3 py-1.5 bg-[#181816] text-white font-semibold flex items-center gap-1 whitespace-nowrap"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Ek Kütle Ekle
+                  <Plus className="w-3.5 h-3.5" /> Yeni Kütle Ekle
                 </button>
                 <button
                   onClick={() => setExportTrigger((n) => n + 1)}
@@ -1255,7 +1911,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                   site={DEFAULT_SITE}
                   blocks={currentBlocks}
                   neighbors={EMPTY_NEIGHBORS}
-                  selectedBlockId={activeBlock.id}
+                  selectedBlockId={activeBlock?.id ?? null}
                   onSelectBlock={(id) => {
                     if (id) setSelectedBlockId(id);
                   }}
@@ -1268,149 +1924,364 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                   nativeSlopePct={tp.slopePct}
                   effectiveSlopePct={effectiveSlopePct}
                   soilClass={effectiveSoilClass}
+                  planUnderlay={planUnderlay}
+                  imported3DModel={imported3DModel}
+                  onDropProjectFile={onDropProjectFile}
                 />
               </div>
 
+              {/* SAĞ PANEL: TAM KÜTLE, BOYUT, CEPHE, BALKON VE ÇATI DÜZENLEYİCİ */}
               <div className="lg:col-span-4 bg-[#FAF9F6] border border-stone-200 p-4 space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <strong className="text-sm text-[#181816]">Seçili Bölüm & Çatı Ayarı</strong>
-                  {currentBlocks.length > 1 && (
-                    <button
-                      onClick={() => {
-                        const rem = currentBlocks.filter((b) => b.id !== activeBlock.id);
-                        setBlocks(rem);
-                        setSelectedBlockId(rem[0]?.id ?? null);
-                      }}
-                      className="text-red-600 flex items-center gap-1"
+                {activeBlock ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-sm text-[#181816]">Seçili Bölüm & Bina Ayarı</strong>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const dup: MassBlock = {
+                              ...activeBlock,
+                              id: `dup_${Date.now().toString().slice(-4)}`,
+                              label: `${activeBlock.label} (Kopya)`,
+                              x: Math.min(28, activeBlock.x + 6),
+                              z: Math.min(24, activeBlock.z + 4),
+                            };
+                            setBlocks([...currentBlocks, dup]);
+                            setSelectedBlockId(dup.id);
+                          }}
+                          className="text-stone-700 hover:text-[#181816] flex items-center gap-1"
+                          title="Seçili bloğu çoğalt"
+                        >
+                          <Copy className="w-3.5 h-3.5" /> Çoğalt
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const rem = currentBlocks.filter((b) => b.id !== activeBlock.id);
+                            setBlocks(rem);
+                            setSelectedBlockId(rem[0]?.id ?? null);
+                          }}
+                          className="text-red-600 flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Sil
+                        </button>
+                      </div>
+                    </div>
+
+                    <select
+                      value={activeBlock.id}
+                      onChange={(e) => setSelectedBlockId(e.target.value)}
+                      className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
                     >
-                      <Trash2 className="w-3.5 h-3.5" /> Sil
+                      {currentBlocks.map((b, i) => (
+                        <option key={b.id} value={b.id}>
+                          {i + 1}. {b.label} ({b.width}×{b.depth}m · {b.floors} Kat)
+                        </option>
+                      ))}
+                    </select>
+
+                    <div>
+                      <label className="block text-stone-600 mb-1">Bölüm / Blok Adı</label>
+                      <input
+                        type="text"
+                        value={activeBlock.label}
+                        onChange={(e) => updateActiveBlock({ label: e.target.value })}
+                        className="w-full bg-white border border-stone-300 px-2.5 py-1.5 font-medium"
+                      />
+                    </div>
+
+                    {/* Genişlik & Derinlik */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Genişlik</span>
+                          <strong>{activeBlock.width}m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={3}
+                          max={48}
+                          step={0.5}
+                          value={activeBlock.width}
+                          onChange={(e) => {
+                            const w = Number(e.target.value);
+                            updateActiveBlock({
+                              width: w,
+                              ridgeDirection: w >= activeBlock.depth ? 'EW' : 'NS',
+                            });
+                          }}
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Derinlik</span>
+                          <strong>{activeBlock.depth}m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={3}
+                          max={42}
+                          step={0.5}
+                          value={activeBlock.depth}
+                          onChange={(e) => {
+                            const d = Number(e.target.value);
+                            updateActiveBlock({
+                              depth: d,
+                              ridgeDirection: activeBlock.width >= d ? 'EW' : 'NS',
+                            });
+                          }}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Kat Adedi & Kat Yüksekliği */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Kat Adedi</span>
+                          <strong>{activeBlock.floors}</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={1}
+                          max={12}
+                          value={activeBlock.floors}
+                          onChange={(e) => updateActiveBlock({ floors: Number(e.target.value) })}
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Kat Yüksekliği</span>
+                          <strong>{activeBlock.floorHeight.toFixed(1)}m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={2.8}
+                          max={14}
+                          step={0.2}
+                          value={activeBlock.floorHeight}
+                          onChange={(e) =>
+                            updateActiveBlock({ floorHeight: Number(e.target.value) })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Konum X, Z ve Dönüş Açısı */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>X</span>
+                          <strong>{activeBlock.x}m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={-30}
+                          max={30}
+                          step={0.5}
+                          value={activeBlock.x}
+                          onChange={(e) => updateActiveBlock({ x: Number(e.target.value) })}
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Z</span>
+                          <strong>{activeBlock.z}m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={-26}
+                          max={26}
+                          step={0.5}
+                          value={activeBlock.z}
+                          onChange={(e) => updateActiveBlock({ z: Number(e.target.value) })}
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Açı</span>
+                          <strong>{activeBlock.rotationDeg}°</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={-90}
+                          max={90}
+                          step={5}
+                          value={activeBlock.rotationDeg}
+                          onChange={(e) =>
+                            updateActiveBlock({ rotationDeg: Number(e.target.value) })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Dış Cephe Malzemesi & Özel Eleman */}
+                    <div className="grid grid-cols-1 gap-2 pt-1 border-t border-stone-200">
+                      <div>
+                        <label className="block text-stone-600 mb-1">Dış Cephe Görünümü</label>
+                        <select
+                          value={activeBlock.customWallHex ?? '#EAE3D2'}
+                          onChange={(e) => {
+                            const sw = FACADE_SWATCHES.find((s) => s.hex === e.target.value);
+                            updateActiveBlock({
+                              customWallHex: e.target.value,
+                              glazingStyle: sw?.glazing ?? activeBlock.glazingStyle,
+                            });
+                          }}
+                          className="w-full bg-white border border-stone-300 px-2.5 py-1.5 font-semibold"
+                        >
+                          {FACADE_SWATCHES.map((sw) => (
+                            <option key={sw.hex} value={sw.hex}>
+                              {sw.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-stone-600 mb-1">Özel Mimari Eleman</label>
+                        <select
+                          value={activeBlock.specialFeature ?? 'none'}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            updateActiveBlock({
+                              specialFeature:
+                                val === 'none'
+                                  ? undefined
+                                  : (val as MassBlock['specialFeature']),
+                            });
+                          }}
+                          className="w-full bg-white border border-stone-300 px-2.5 py-1.5 font-semibold"
+                        >
+                          <option value="none">Standart Cephe</option>
+                          <option value="balconies">Çıkma Balkonlar (Konut / Otel)</option>
+                          <option value="entrance_canopy">Zemin Giriş Saçağı</option>
+                          <option value="arcade">Kemerli Revak / Kolonad</option>
+                          <option value="outdoor_pool">Açık Yüzme Havuzu</option>
+                          <option value="sadirvan">Şadırvan (Avlu Pavyonu)</option>
+                          <option value="minaret">Minare</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Çatı / Üst Örtü Ayarları */}
+                    <div className="pt-1 border-t border-stone-200 space-y-2">
+                      <div>
+                        <label className="block text-stone-600 mb-1">Çatı / Üst Örtü Tipi</label>
+                        <select
+                          value={activeBlock.roofType}
+                          onChange={(e) =>
+                            updateActiveBlock({ roofType: e.target.value as RoofTypeKey })
+                          }
+                          className="w-full bg-white border border-stone-300 px-2.5 py-1.5 font-semibold"
+                        >
+                          {ROOF_OPTIONS.map((ro) => (
+                            <option key={ro.key} value={ro.key}>
+                              {ro.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="flex justify-between mb-1">
+                            <span>Çatı Açısı</span>
+                            <strong>{activeBlock.roofPitchDeg}°</strong>
+                          </label>
+                          <input
+                            type="range"
+                            min={5}
+                            max={45}
+                            value={activeBlock.roofPitchDeg}
+                            onChange={(e) =>
+                              updateActiveBlock({ roofPitchDeg: Number(e.target.value) })
+                            }
+                            className="w-full"
+                          />
+                        </div>
+                        <div>
+                          <label className="flex justify-between mb-1">
+                            <span>Güney Saçak</span>
+                            <strong>{activeBlock.overhangSouthM}m</strong>
+                          </label>
+                          <input
+                            type="range"
+                            min={0}
+                            max={2.5}
+                            step={0.1}
+                            value={activeBlock.overhangSouthM}
+                            onChange={(e) =>
+                              updateActiveBlock({ overhangSouthM: Number(e.target.value) })
+                            }
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 pt-1 cursor-pointer font-medium text-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={activeBlock.hasPvPanels}
+                          onChange={(e) => updateActiveBlock({ hasPvPanels: e.target.checked })}
+                        />
+                        Çatıya Güneş Enerjisi Paneli (PV) Yerleştir
+                      </label>
+                    </div>
+                  </>
+                ) : (
+                  <div className="py-8 text-center space-y-3 text-stone-600">
+                    <div className="font-bold text-sm text-[#181816]">
+                      Arsada Seçili Kütle Bulunmuyor
+                    </div>
+                    <p className="leading-relaxed">
+                      Üstteki kareli arsa üzerinde fareyle sürükleyerek kendi binanızı çizebilir,
+                      proje dosyası sürükleyebilir veya aşağıdaki butonla ilk bloğunuzu
+                      ekleyebilirsiniz.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const first: MassBlock = {
+                          id: `blk_${Date.now().toString().slice(-4)}`,
+                          label: 'Ana Bina Bloğu',
+                          role: 'primary_living',
+                          x: 0,
+                          z: 0,
+                          width: 18,
+                          depth: 11,
+                          floors: 3,
+                          floorHeight: 3.3,
+                          rotationDeg: 0,
+                          roofType: 'gable',
+                          roofPitchDeg: 22,
+                          secondaryPitchDeg: 85,
+                          overhangSouthM: 1.0,
+                          sawtoothCount: 3,
+                          skylightRatio: 0.25,
+                          ridgeDirection: 'EW',
+                          hasPvPanels: false,
+                          glazingStyle: 'punched',
+                          customWallHex: '#EAE3D2',
+                          customRoofHex: '#475569',
+                        };
+                        setBlocks([first]);
+                        setSelectedBlockId(first.id);
+                      }}
+                      className="px-4 py-2 bg-[#181816] text-white font-bold inline-flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> İlk Bina Bloğunu Ekle
                     </button>
-                  )}
-                </div>
-
-                <select
-                  value={activeBlock.id}
-                  onChange={(e) => setSelectedBlockId(e.target.value)}
-                  className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
-                >
-                  {currentBlocks.map((b, i) => (
-                    <option key={b.id} value={b.id}>
-                      {i + 1}. {b.label} ({Math.round(b.floors * b.floorHeight)}m yükseklik)
-                    </option>
-                  ))}
-                </select>
-
-                <div>
-                  <label className="block text-stone-600 mb-1">Çatı / Üst Örtü Tipi</label>
-                  <select
-                    value={activeBlock.roofType}
-                    onChange={(e) => {
-                      const rt = e.target.value as RoofTypeKey;
-                      setBlocks(
-                        currentBlocks.map((b) =>
-                          b.id === activeBlock.id ? { ...b, roofType: rt } : b
-                        )
-                      );
-                    }}
-                    className="w-full bg-white border border-stone-300 px-2.5 py-2 font-semibold"
-                  >
-                    {ROOF_OPTIONS.map((ro) => (
-                      <option key={ro.key} value={ro.key}>
-                        {ro.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="flex justify-between mb-1">
-                    <span>Çatı / Kubbe Yüksekliği & Açısı</span>
-                    <strong>{activeBlock.roofPitchDeg}°</strong>
-                  </label>
-                  <input
-                    type="range"
-                    min={5}
-                    max={45}
-                    value={activeBlock.roofPitchDeg}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setBlocks(
-                        currentBlocks.map((b) =>
-                          b.id === activeBlock.id ? { ...b, roofPitchDeg: v } : b
-                        )
-                      );
-                    }}
-                    className="w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="flex justify-between mb-1">
-                    <span>Güney Saçak Uzantısı</span>
-                    <strong>{activeBlock.overhangSouthM} m</strong>
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={2.5}
-                    step={0.1}
-                    value={activeBlock.overhangSouthM}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setBlocks(
-                        currentBlocks.map((b) =>
-                          b.id === activeBlock.id ? { ...b, overhangSouthM: v } : b
-                        )
-                      );
-                    }}
-                    className="w-full"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <div>
-                    <label className="flex justify-between mb-1">
-                      <span>Kat Adedi</span>
-                      <strong>{activeBlock.floors}</strong>
-                    </label>
-                    <input
-                      type="range"
-                      min={1}
-                      max={10}
-                      value={activeBlock.floors}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setBlocks(
-                          currentBlocks.map((b) =>
-                            b.id === activeBlock.id ? { ...b, floors: v } : b
-                          )
-                        );
-                      }}
-                      className="w-full"
-                    />
                   </div>
-                  <div>
-                    <label className="flex justify-between mb-1">
-                      <span>Konum X</span>
-                      <strong>{activeBlock.x}m</strong>
-                    </label>
-                    <input
-                      type="range"
-                      min={-35}
-                      max={35}
-                      value={activeBlock.x}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setBlocks(
-                          currentBlocks.map((b) =>
-                            b.id === activeBlock.id ? { ...b, x: v } : b
-                          )
-                        );
-                      }}
-                      className="w-full"
-                    />
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           </div>
