@@ -960,10 +960,14 @@ export async function fetchVerifiedSiteBundle(
     climateType = 'cold_mountain';
     koppen = 'Dfb / Dsb';
     koppenDesc = 'Soğuk Karasal / Yüksek İrtifa İklimi';
-  } else if (seasons.summer.avgTempC >= 26 && seasons.summer.humidityPct <= 44 && annualPrecipMm < 560) {
+  } else if (
+    seasons.summer.avgTempC >= 26 &&
+    seasons.summer.humidityPct <= 46 &&
+    (annualPrecipMm < 680 || seasons.summer.precipitationMm < 50)
+  ) {
     climateType = 'hot_arid';
-    koppen = 'BSh / BSk';
-    koppenDesc = 'Sıcak-Kurak / Yarı Kurak Bozkır İklimi';
+    koppen = 'BSh / Csa';
+    koppenDesc = 'Sıcak-Kurak / Kurak Yazlı Bozkır İklimi';
   } else if (seasons.summer.avgTempC >= 25 && seasons.winter.avgTempC >= 7.5) {
     climateType = 'hot_humid';
     koppen = 'Csa';

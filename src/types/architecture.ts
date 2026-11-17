@@ -106,6 +106,7 @@ export type RoofTypeKey =
   | 'mono_pitch'
   | 'asymmetric_gable'
   | 'gable'
+  | 'flat_terrace'
   | 'flat_green'
   | 'butterfly'
   | 'louver_canopy'
@@ -118,6 +119,7 @@ export type SpecialBlockFeature =
   | 'balconies'
   | 'arcade'
   | 'entrance_canopy'
+  | 'pergola'
   | 'glass_bridge'
   | 'outdoor_pool';
 
@@ -127,6 +129,8 @@ export interface MassBlock {
   role: SpaceZoneRole;
   x: number; // +X = Doğu, -X = Batı (metre)
   z: number; // +Z = Güney, -Z = Kuzey (metre)
+  yOffsetM?: number; // Dikey kot farkı (+Y = havada/konsol, -Y = zemin altı / gömülü bodrum, m)
+  basementFloors?: number; // Zemin altına inen bodrum kat adedi (0 - 4)
   width: number; // X yönü genişlik (m)
   depth: number; // Z yönü derinlik (m)
   floors: number;

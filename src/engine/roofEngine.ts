@@ -47,6 +47,14 @@ export const ROOF_TYPES_META: Record<RoofTypeKey, RoofTypeMeta> = {
       'Yüksek yağış ve kar yükünü hızla tahliye eden, geniş saçaklarıyla cepheleri yağmur ve yaz güneşinden koruyan klasik eğimli çatı.',
     bestFor: 'Karadeniz, Doğu Anadolu, Konut ve Sağlık Yapıları',
   },
+  flat_terrace: {
+    key: 'flat_terrace',
+    name: 'Mimari Parapetli Düz Teras Dam (Taş / Isı Yalıtımlı)',
+    shortName: 'Düz Teras Çatı',
+    description:
+      'Sıcak-kurak iklimlerde (Güneydoğu taş mimarisi) ve çağdaş kübik yapılarda kullanılan, yüksek ısı yalıtımlı ve parapet duvarlı yalın düz teras çatı.',
+    bestFor: 'Diyarbakır / Mardin Sıcak-Kurak İklimi, Modern Villa, Konut ve Ofis',
+  },
   flat_green: {
     key: 'flat_green',
     name: 'Ekstansif Yeşil Teras + Tepe Işık Feneri',
@@ -221,14 +229,14 @@ export function recommendOptimalRoofForBlock(
       };
     }
     return {
-      roofType: 'flat_green',
+      roofType: 'flat_terrace',
       roofPitchDeg: 4,
       secondaryPitchDeg: 85,
       overhangSouthM: Math.max(1.1, idealOverhang + 0.2),
-      sawtoothCount: 2,
-      skylightRatio: 0.16,
-      hasPvPanels: true,
-      reasoning: `Yatay çatıdaki aşırı yaz ışınımını (${city.seasons.summer.directRadiationWm2} W/m²) toprak/sedum ısıl kütlesiyle sönümleyen yeşil teras ve kuzey ışık fenerleri.`,
+      sawtoothCount: 1,
+      skylightRatio: 0.12,
+      hasPvPanels: false,
+      reasoning: `Sıcak-kurak Güneydoğu ikliminde aşırı yaz ışınımını (${city.seasons.summer.directRadiationWm2} W/m²) açık renk doğal taş döşeme ve kalın ısı yalıtımıyla geri yansıtan, gece serinlemesine uygun parapetli düz teras dam.`,
     };
   }
 

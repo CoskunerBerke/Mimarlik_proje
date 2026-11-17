@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BuildingFunctionKey,
   MassBlock,
@@ -68,6 +68,7 @@ import {
   Mountain,
   PenTool,
   Plus,
+  Redo2,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -75,6 +76,7 @@ import {
   Sun,
   Trash2,
   Truck,
+  Undo2,
   Wind,
   X,
 } from 'lucide-react';
@@ -147,6 +149,7 @@ const SEASON_META: Array<{ key: SeasonKey; label: string }> = [
 ];
 
 const ROOF_OPTIONS: Array<{ key: RoofTypeKey; label: string }> = [
+  { key: 'flat_terrace', label: 'Mimari Parapetli Düz Teras Dam (Yalın / Taş)' },
   { key: 'dome', label: 'Merkezi Kubbe + Kasnak Pencereleri (Cami / Anıtsal)' },
   { key: 'barrel_vault', label: 'Geniş Açıklıklı Tonoz / Kemer Çatı (Spor / Salon)' },
   { key: 'sawtooth', label: 'Testere Dişi Kuzey Işıklığı (Sawtooth)' },
@@ -157,6 +160,11 @@ const ROOF_OPTIONS: Array<{ key: RoofTypeKey; label: string }> = [
   { key: 'butterfly', label: 'Kelebek (V-Kesit) Çatı' },
   { key: 'louver_canopy', label: 'Güneş Kırıcı Pergola Çatı' },
 ];
+
+interface BlockHistorySnapshot {
+  blocks: MassBlock[];
+  selectedBlockId: string | null;
+}
 
 export const App: React.FC = () => {
   // Giriş Formu ve Tam Konum Kilidi Durumu
@@ -198,12 +206,182 @@ export const App: React.FC = () => {
   const [season, setSeason] = useState<SeasonKey>('summer');
   const [solarHour, setSolarHour] = useState<number>(13.0);
   const [activeTypologyKey, setActiveTypologyKey] = useState<MassTypologyKey>('u_court');
-  const [blocks, setBlocks] = useState<MassBlock[]>([]);
+  const [blocks, setBlocksRaw] = useState<MassBlock[]>([]);
   const [generatedCourtyardM2, setGeneratedCourtyardM2] = useState<number>(320);
   const [generatedOrientationDeg, setGeneratedOrientationDeg] = useState<number>(10);
   const [appliedPromptNotes, setAppliedPromptNotes] = useState<string[]>([]);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [exportTrigger, setExportTrigger] = useState(0);
+
+  // Tam Geri Al (Ctrl+Z / Undo) ve İleri Al (Ctrl+Y / Redo) Geçmiş Yığını
+  const [undoStack, setUndoStack] = useState<BlockHistorySnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<BlockHistorySnapshot[]>([]);
+  const blocksRef = useRef<MassBlock[]>(blocks);
+  blocksRef.current = blocks;
+  const selectedBlockIdRef = useRef<string | null>(selectedBlockId);
+  selectedBlockIdRef.current = selectedBlockId;
+  const undoStackRef = useRef<BlockHistorySnapshot[]>(undoStack);
+  undoStackRef.current = undoStack;
+  const redoStackRef = useRef<BlockHistorySnapshot[]>(redoStack);
+  redoStackRef.current = redoStack;
+  const lastCoalesceTimeRef = useRef<number>(0);
+
+  const cloneBlocks = (list: MassBlock[]): MassBlock[] => list.map((b) => ({ ...b }));
+
+  const resetBlockHistory = useCallback(() => {
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    lastCoalesceTimeRef.current = 0;
+    setUndoStack([]);
+    setRedoStack([]);
+  }, []);
+
+  const replaceBlocksClean = useCallback(
+    (nextBlocks: MassBlock[], nextSelectedId?: string | null) => {
+      blocksRef.current = nextBlocks;
+      const sel =
+        nextSelectedId !== undefined ? nextSelectedId : (nextBlocks[0]?.id ?? null);
+      selectedBlockIdRef.current = sel;
+      setBlocksRaw(nextBlocks);
+      setSelectedBlockId(sel);
+      resetBlockHistory();
+    },
+    [resetBlockHistory]
+  );
+
+  const setBlocks: React.Dispatch<React.SetStateAction<MassBlock[]>> = useCallback((action) => {
+    const prev = blocksRef.current;
+    const next = typeof action === 'function' ? action(prev) : action;
+    if (next === prev) return;
+
+    const now = Date.now();
+    const sameIds =
+      prev.length === next.length && prev.every((b, idx) => b.id === next[idx]?.id);
+    const shouldCoalesce =
+      sameIds &&
+      undoStackRef.current.length > 0 &&
+      now - lastCoalesceTimeRef.current < 650;
+
+    if (!shouldCoalesce) {
+      const snap: BlockHistorySnapshot = {
+        blocks: cloneBlocks(prev),
+        selectedBlockId: selectedBlockIdRef.current,
+      };
+      const nextUndo = [...undoStackRef.current.slice(-49), snap];
+      undoStackRef.current = nextUndo;
+      setUndoStack(nextUndo);
+    }
+    lastCoalesceTimeRef.current = now;
+    if (redoStackRef.current.length > 0) {
+      redoStackRef.current = [];
+      setRedoStack([]);
+    }
+
+    blocksRef.current = next;
+    setBlocksRaw(next);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    const previous = stack[stack.length - 1];
+    const nextUndo = stack.slice(0, -1);
+    const currentSnap: BlockHistorySnapshot = {
+      blocks: cloneBlocks(blocksRef.current),
+      selectedBlockId: selectedBlockIdRef.current,
+    };
+    const nextRedo = [...redoStackRef.current.slice(-49), currentSnap];
+
+    undoStackRef.current = nextUndo;
+    redoStackRef.current = nextRedo;
+    lastCoalesceTimeRef.current = 0;
+
+    const restoredBlocks = cloneBlocks(previous.blocks);
+    const restoredSel =
+      previous.selectedBlockId && restoredBlocks.some((b) => b.id === previous.selectedBlockId)
+        ? previous.selectedBlockId
+        : (restoredBlocks[0]?.id ?? null);
+
+    blocksRef.current = restoredBlocks;
+    selectedBlockIdRef.current = restoredSel;
+    setUndoStack(nextUndo);
+    setRedoStack(nextRedo);
+    setBlocksRaw(restoredBlocks);
+    setSelectedBlockId(restoredSel);
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    const stack = redoStackRef.current;
+    if (stack.length === 0) return;
+    const restored = stack[stack.length - 1];
+    const nextRedo = stack.slice(0, -1);
+    const currentSnap: BlockHistorySnapshot = {
+      blocks: cloneBlocks(blocksRef.current),
+      selectedBlockId: selectedBlockIdRef.current,
+    };
+    const nextUndo = [...undoStackRef.current.slice(-49), currentSnap];
+
+    undoStackRef.current = nextUndo;
+    redoStackRef.current = nextRedo;
+    lastCoalesceTimeRef.current = 0;
+
+    const restoredBlocks = cloneBlocks(restored.blocks);
+    const restoredSel =
+      restored.selectedBlockId && restoredBlocks.some((b) => b.id === restored.selectedBlockId)
+        ? restored.selectedBlockId
+        : (restoredBlocks[0]?.id ?? null);
+
+    blocksRef.current = restoredBlocks;
+    selectedBlockIdRef.current = restoredSel;
+    setUndoStack(nextUndo);
+    setRedoStack(nextRedo);
+    setBlocksRaw(restoredBlocks);
+    setSelectedBlockId(restoredSel);
+  }, []);
+
+  // Klavyeden Ctrl+Z / Cmd+Z (Geri Al) ve Ctrl+Y / Ctrl+Shift+Z (İleri Al) Desteği
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el) {
+        const tag = el.tagName;
+        if (tag === 'TEXTAREA' || el.isContentEditable) return;
+        if (tag === 'INPUT') {
+          const inputType = ((el as HTMLInputElement).type || 'text').toLowerCase();
+          if (
+            inputType !== 'range' &&
+            inputType !== 'checkbox' &&
+            inputType !== 'radio' &&
+            inputType !== 'button'
+          ) {
+            return;
+          }
+        }
+      }
+
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        if (e.shiftKey) {
+          if (redoStackRef.current.length > 0) {
+            e.preventDefault();
+            handleRedo();
+          }
+        } else if (undoStackRef.current.length > 0) {
+          e.preventDefault();
+          handleUndo();
+        }
+      } else if (key === 'y') {
+        if (redoStackRef.current.length > 0) {
+          e.preventDefault();
+          handleRedo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleUndo, handleRedo]);
 
   // Canlı Konum Otomatik Tamamlama (Yanlış yan mahalleyi alma sorununu önler)
   useEffect(() => {
@@ -234,12 +412,11 @@ export const App: React.FC = () => {
       targetAreaM2,
       userBuildingPrompt
     );
-    setBlocks(generated.blocks);
+    replaceBlocksClean(generated.blocks, generated.blocks[0]?.id ?? null);
     setGeneratedCourtyardM2(generated.courtyardAreaM2);
     setGeneratedOrientationDeg(generated.orientationDeg);
     setAppliedPromptNotes(generated.appliedNotes);
-    setSelectedBlockId(generated.blocks[0]?.id ?? null);
-  }, [bundle, funcKey, targetAreaM2, userBuildingPrompt, studioMode]);
+  }, [bundle, funcKey, targetAreaM2, userBuildingPrompt, studioMode, replaceBlocksClean]);
 
   const handleSelectFunction = (nextKey: BuildingFunctionKey) => {
     setFuncKey(nextKey);
@@ -421,8 +598,7 @@ export const App: React.FC = () => {
           userBuildingPrompt
         );
         if (studioMode !== 'custom_build') {
-          setBlocks(generated.blocks);
-          setSelectedBlockId(generated.blocks[0]?.id ?? null);
+          replaceBlocksClean(generated.blocks, generated.blocks[0]?.id ?? null);
         }
         setGeneratedCourtyardM2(generated.courtyardAreaM2);
         setGeneratedOrientationDeg(generated.orientationDeg);
@@ -1064,6 +1240,10 @@ ${userBuildingPrompt.trim() ? `- **Kullanıcı Tasarım İsteği:** ${userBuildi
             setBlocks={setBlocks}
             selectedBlockId={selectedBlockId}
             setSelectedBlockId={setSelectedBlockId}
+            canUndo={undoStack.length > 0}
+            canRedo={redoStack.length > 0}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
             evaluatedMaterials={evaluatedMaterials}
             recommendedMaterialsMap={recommendedMaterialsMap}
             assemblySummary={assemblySummary}
@@ -1161,6 +1341,10 @@ interface ReportSectionsProps {
   setBlocks: React.Dispatch<React.SetStateAction<MassBlock[]>>;
   selectedBlockId: string | null;
   setSelectedBlockId: (id: string | null) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   evaluatedMaterials: ReturnType<typeof evaluateMaterialsForProject>;
   recommendedMaterialsMap: Record<MaterialCategoryKey, string>;
   assemblySummary: NonNullable<ReturnType<typeof calculateAssemblySummary>>;
@@ -1213,6 +1397,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
   setBlocks,
   selectedBlockId,
   setSelectedBlockId,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   evaluatedMaterials,
   recommendedMaterialsMap,
   assemblySummary,
@@ -1920,6 +2108,10 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                   planUnderlay={planUnderlay}
                   prevailingWindLabel={ce.annualWindRose[0]?.name ?? 'KD (Poyraz)'}
                   recommendedUnitMassAvgKgM2={avgUnitMassKgM2}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  onUndo={onUndo}
+                  onRedo={onRedo}
                 />
               </div>
             )}
@@ -1959,7 +2151,33 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onUndo}
+                  disabled={!canUndo}
+                  title="Son işlemi geri al (Ctrl+Z)"
+                  className={`px-2.5 py-1.5 border font-semibold flex items-center gap-1 whitespace-nowrap ${
+                    canUndo
+                      ? 'bg-white text-[#181816] border-stone-300 hover:border-[#181816]'
+                      : 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed'
+                  }`}
+                >
+                  <Undo2 className="w-3.5 h-3.5" /> Geri Al
+                </button>
+                <button
+                  type="button"
+                  onClick={onRedo}
+                  disabled={!canRedo}
+                  title="Geri alınan işlemi ileri al (Ctrl+Y)"
+                  className={`px-2.5 py-1.5 border font-semibold flex items-center gap-1 whitespace-nowrap ${
+                    canRedo
+                      ? 'bg-white text-[#181816] border-stone-300 hover:border-[#181816]'
+                      : 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed'
+                  }`}
+                >
+                  <Redo2 className="w-3.5 h-3.5" /> İleri Al
+                </button>
                 <button
                   onClick={() => {
                     const baseTemplate: MassBlock = activeBlock ?? {
@@ -1968,9 +2186,11 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       role: 'primary_living',
                       x: 0,
                       z: 0,
+                      yOffsetM: 0,
                       width: 16,
                       depth: 11,
                       floors: 3,
+                      basementFloors: 0,
                       floorHeight: 3.3,
                       rotationDeg: 0,
                       roofType: 'gable',
@@ -1991,6 +2211,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       label: `Bina Bloğu #${currentBlocks.length + 1}`,
                       x: (currentBlocks.length % 3) * 4 - 4,
                       z: (currentBlocks.length % 2) * 5,
+                      yOffsetM: 0,
                       specialFeature: undefined,
                     };
                     setBlocks([...currentBlocks, nextBlk]);
@@ -2043,9 +2264,22 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
               <div className="lg:col-span-4 bg-[#FAF9F6] border border-stone-200 p-4 space-y-3 text-xs">
                 {activeBlock ? (
                   <>
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <strong className="text-sm text-[#181816]">Seçili Bölüm & Bina Ayarı</strong>
                       <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={onUndo}
+                          disabled={!canUndo}
+                          className={`flex items-center gap-1 ${
+                            canUndo
+                              ? 'text-[#181816] font-semibold hover:text-[#C85A17]'
+                              : 'text-stone-400 cursor-not-allowed'
+                          }`}
+                          title="Son işlemi veya silinen kütleyi geri al (Ctrl+Z)"
+                        >
+                          <Undo2 className="w-3.5 h-3.5" /> Geri Al
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -2085,7 +2319,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                     >
                       {currentBlocks.map((b, i) => (
                         <option key={b.id} value={b.id}>
-                          {i + 1}. {b.label} ({b.width}×{b.depth}m · {b.floors} Kat)
+                          {i + 1}. {b.label} ({b.width}×{b.depth}m · {b.floors} Kat
+                          {(b.basementFloors ?? 0) > 0 ? ` + ${b.basementFloors} Bodrum` : ''})
                         </option>
                       ))}
                     </select>
@@ -2146,8 +2381,8 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       </div>
                     </div>
 
-                    {/* Kat Adedi & Kat Yüksekliği */}
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* Kat Adedi, Bodrum Kat (Zemin Altı) & Kat Yüksekliği */}
+                    <div className="grid grid-cols-3 gap-2">
                       <div>
                         <label className="flex justify-between mb-1">
                           <span>Kat Adedi</span>
@@ -2164,7 +2399,26 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       </div>
                       <div>
                         <label className="flex justify-between mb-1">
-                          <span>Kat Yüksekliği</span>
+                          <span>Bodrum Kat</span>
+                          <strong className="text-[#C85A17]">
+                            {activeBlock.basementFloors ?? 0}
+                          </strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={4}
+                          step={1}
+                          value={activeBlock.basementFloors ?? 0}
+                          onChange={(e) =>
+                            updateActiveBlock({ basementFloors: Number(e.target.value) })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1">
+                          <span>Kat Yüks.</span>
                           <strong>{activeBlock.floorHeight.toFixed(1)}m</strong>
                         </label>
                         <input
@@ -2181,11 +2435,11 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       </div>
                     </div>
 
-                    {/* Konum X, Z ve Dönüş Açısı */}
-                    <div className="grid grid-cols-3 gap-2">
+                    {/* Konum X, Z, Y Kotu (Aşağı / Yukarı) ve Dönüş Açısı */}
+                    <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="flex justify-between mb-1">
-                          <span>X</span>
+                          <span>Konum X (Doğu/Batı)</span>
                           <strong>{activeBlock.x}m</strong>
                         </label>
                         <input
@@ -2200,7 +2454,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       </div>
                       <div>
                         <label className="flex justify-between mb-1">
-                          <span>Z</span>
+                          <span>Konum Z (Kuzey/Güney)</span>
                           <strong>{activeBlock.z}m</strong>
                         </label>
                         <input
@@ -2214,8 +2468,46 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                         />
                       </div>
                       <div>
+                        <label className="flex justify-between items-center mb-1">
+                          <span>Y Kotu (Aşağı/Yukarı)</span>
+                          <span className="flex items-center gap-1">
+                            {(activeBlock.yOffsetM ?? 0) !== 0 && (
+                              <button
+                                type="button"
+                                onClick={() => updateActiveBlock({ yOffsetM: 0 })}
+                                className="text-[10px] underline text-stone-500 hover:text-[#181816]"
+                              >
+                                Sıfırla
+                              </button>
+                            )}
+                            <strong
+                              className={
+                                (activeBlock.yOffsetM ?? 0) < 0
+                                  ? 'text-[#C85A17]'
+                                  : (activeBlock.yOffsetM ?? 0) > 0
+                                    ? 'text-sky-700'
+                                    : ''
+                              }
+                            >
+                              {(activeBlock.yOffsetM ?? 0) > 0
+                                ? `+${activeBlock.yOffsetM}m`
+                                : `${activeBlock.yOffsetM ?? 0}m`}
+                            </strong>
+                          </span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-12}
+                          max={18}
+                          step={0.5}
+                          value={activeBlock.yOffsetM ?? 0}
+                          onChange={(e) => updateActiveBlock({ yOffsetM: Number(e.target.value) })}
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
                         <label className="flex justify-between mb-1">
-                          <span>Açı</span>
+                          <span>Dönüş Açısı</span>
                           <strong>{activeBlock.rotationDeg}°</strong>
                         </label>
                         <input
@@ -2231,6 +2523,13 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                         />
                       </div>
                     </div>
+
+                    {((activeBlock.yOffsetM ?? 0) < 0 || (activeBlock.basementFloors ?? 0) > 0) && (
+                      <div className="bg-amber-50/80 border border-amber-300 px-2.5 py-1.5 text-[11px] text-stone-800">
+                        ✓ <strong>Zemin Altı Kesit Görünümü Aktif:</strong> Arazi yüzeyi yarı-saydam
+                        açılarak zemin altı / bodrum katlar gösteriliyor.
+                      </div>
+                    )}
 
                     {/* Dış Cephe Malzemesi & Özel Eleman */}
                     <div className="grid grid-cols-1 gap-2 pt-1 border-t border-stone-200">
@@ -2271,6 +2570,7 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                           className="w-full bg-white border border-stone-300 px-2.5 py-1.5 font-semibold"
                         >
                           <option value="none">Standart Cephe</option>
+                          <option value="pergola">Açık Kolonlu Ahşap Pergola Veranda</option>
                           <option value="balconies">Çıkma Balkonlar (Konut / Otel)</option>
                           <option value="entrance_canopy">Zemin Giriş Saçağı</option>
                           <option value="arcade">Kemerli Revak / Kolonad</option>
@@ -2356,39 +2656,52 @@ const ReportSections: React.FC<ReportSectionsProps> = ({
                       proje dosyası sürükleyebilir veya aşağıdaki butonla ilk bloğunuzu
                       ekleyebilirsiniz.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const first: MassBlock = {
-                          id: `blk_${Date.now().toString().slice(-4)}`,
-                          label: 'Ana Bina Bloğu',
-                          role: 'primary_living',
-                          x: 0,
-                          z: 0,
-                          width: 18,
-                          depth: 11,
-                          floors: 3,
-                          floorHeight: 3.3,
-                          rotationDeg: 0,
-                          roofType: 'gable',
-                          roofPitchDeg: 22,
-                          secondaryPitchDeg: 85,
-                          overhangSouthM: 1.0,
-                          sawtoothCount: 3,
-                          skylightRatio: 0.25,
-                          ridgeDirection: 'EW',
-                          hasPvPanels: false,
-                          glazingStyle: 'punched',
-                          customWallHex: '#EAE3D2',
-                          customRoofHex: '#475569',
-                        };
-                        setBlocks([first]);
-                        setSelectedBlockId(first.id);
-                      }}
-                      className="px-4 py-2 bg-[#181816] text-white font-bold inline-flex items-center gap-1.5"
-                    >
-                      <Plus className="w-3.5 h-3.5" /> İlk Bina Bloğunu Ekle
-                    </button>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {canUndo && (
+                        <button
+                          type="button"
+                          onClick={onUndo}
+                          className="px-4 py-2 bg-white border-2 border-[#181816] text-[#181816] font-bold inline-flex items-center gap-1.5"
+                        >
+                          <Undo2 className="w-3.5 h-3.5" /> Silineni Geri Al (Ctrl+Z)
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const first: MassBlock = {
+                            id: `blk_${Date.now().toString().slice(-4)}`,
+                            label: 'Ana Bina Bloğu',
+                            role: 'primary_living',
+                            x: 0,
+                            z: 0,
+                            yOffsetM: 0,
+                            width: 18,
+                            depth: 11,
+                            floors: 3,
+                            basementFloors: 0,
+                            floorHeight: 3.3,
+                            rotationDeg: 0,
+                            roofType: 'gable',
+                            roofPitchDeg: 22,
+                            secondaryPitchDeg: 85,
+                            overhangSouthM: 1.0,
+                            sawtoothCount: 3,
+                            skylightRatio: 0.25,
+                            ridgeDirection: 'EW',
+                            hasPvPanels: false,
+                            glazingStyle: 'punched',
+                            customWallHex: '#EAE3D2',
+                            customRoofHex: '#475569',
+                          };
+                          setBlocks([first]);
+                          setSelectedBlockId(first.id);
+                        }}
+                        className="px-4 py-2 bg-[#181816] text-white font-bold inline-flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> İlk Bina Bloğunu Ekle
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

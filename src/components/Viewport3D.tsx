@@ -504,6 +504,53 @@ function buildParametricRoofGroup(
     );
     topSkylight.position.set(0, vaultRise + 0.04, 0);
     innerHolder.add(topSkylight);
+  } else if (block.roofType === 'flat_terrace') {
+    // Mimari Parapetli Düz Teras Çatı (Taş / Beton Döşeme + Harpuştalı Parapet — Işıklıksız Yalın Görünüm)
+    const terraceDeckMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(block.customRoofHex ?? '#D8D2C5'),
+      roughness: 0.86,
+      metalness: 0.03,
+    });
+    const copingMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color('#44403C'),
+      roughness: 0.65,
+    });
+
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(spanX * 0.96, 0.24, spanZ * 0.96),
+      terraceDeckMat
+    );
+    deck.position.y = 0.12;
+    deck.receiveShadow = true;
+    innerHolder.add(deck);
+
+    const pThick = 0.32;
+    const pH = 0.62;
+    const sides: Array<[number, number, number, number]> = [
+      [spanX, pThick, 0, -spanZ / 2 + pThick / 2],
+      [spanX, pThick, 0, spanZ / 2 - pThick / 2],
+      [pThick, spanZ, spanX / 2 - pThick / 2, 0],
+      [pThick, spanZ, -spanX / 2 + pThick / 2, 0],
+    ];
+    for (const [pw, pd, px, pz] of sides) {
+      const pWall = new THREE.Mesh(new THREE.BoxGeometry(pw, pH, pd), wallMat);
+      pWall.position.set(px, pH / 2, pz);
+      pWall.castShadow = true;
+      pWall.receiveShadow = true;
+      const coping = new THREE.Mesh(new THREE.BoxGeometry(pw + 0.06, 0.08, pd + 0.06), copingMat);
+      coping.position.set(px, pH + 0.04, pz);
+      innerHolder.add(pWall, coping);
+    }
+
+    if (block.hasPvPanels) {
+      const pvStand = new THREE.Mesh(
+        new THREE.BoxGeometry(spanX * 0.68, 0.08, Math.min(2.4, spanZ * 0.42)),
+        pvMat
+      );
+      pvStand.position.set(0, 0.85, 0);
+      pvStand.rotation.x = 0.38;
+      innerHolder.add(pvStand);
+    }
   } else {
     // flat_green: Ekstansif yeşil çatı + parapet + kuzey tepe ışık fenerleri
     const greenBedGeo = new THREE.BoxGeometry(spanX * 0.94, 0.26, spanZ * 0.94);
@@ -801,6 +848,19 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     };
 
     const terrainGroup = build3DTerrainCutawayGroup(180, 40, terrainCfg, soilClass);
+    const hasSubterranean = blocks.some(
+      (b) => (b.yOffsetM ?? 0) < -0.15 || (b.basementFloors ?? 0) > 0
+    );
+    if (hasSubterranean) {
+      // Zemin altı / bodrum kat varsa üst toprak kabuğunu yarı-saydam X-Ray kesit görünümüne geçir
+      const topSurface = terrainGroup.children[0] as THREE.Mesh | undefined;
+      if (topSurface && (topSurface.material as THREE.MeshStandardMaterial)?.vertexColors) {
+        const mat = topSurface.material as THREE.MeshStandardMaterial;
+        mat.transparent = true;
+        mat.opacity = 0.56;
+        mat.depthWrite = false;
+      }
+    }
     massRoot.add(terrainGroup);
 
     // Arazi eğimine tam oturan Parsel Sınırı ve Çekme Mesafesi Çizgileri
@@ -1025,9 +1085,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       const groundFloorY = maxCornerY + 0.2;
       const plinthBottomY = minCornerY - 1.8;
       const plinthH = Math.max(0.5, groundFloorY - plinthBottomY);
+      const yOff = b.yOffsetM ?? 0;
+      const bsmFloors = Math.max(0, Math.round(b.basementFloors ?? 0));
 
       const blockGroup = new THREE.Group();
-      blockGroup.position.set(b.x, groundFloorY, b.z);
+      blockGroup.position.set(b.x, groundFloorY + yOff, b.z);
       blockGroup.rotation.y = (-b.rotationDeg * Math.PI) / 180;
 
       const totalH = b.floors * b.floorHeight;
@@ -1041,6 +1103,78 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         colorMode === 'role'
           ? '#334155'
           : b.customRoofHex ?? activeMaterialRoofColor;
+
+      // ÖZEL ELEMAN 0: YARI-AÇIK MİMARİ PERGOLA VERANDA (Duvar kutusu değil, gerçek açık kolonlu pergola!)
+      if (b.specialFeature === 'pergola') {
+        const timberMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(b.customWallHex ?? '#6B4B2E'),
+          roughness: 0.72,
+        });
+        const patioMat = new THREE.MeshStandardMaterial({
+          color: 0xe5dfd3,
+          roughness: 0.88,
+        });
+
+        // Zemin taş teras plağı
+        const patio = new THREE.Mesh(
+          new THREE.BoxGeometry(b.width, 0.22, b.depth),
+          patioMat
+        );
+        patio.position.y = 0.11;
+        patio.receiveShadow = true;
+        blockGroup.add(patio);
+
+        // Köşe ve orta ahşap/çelik dikmeler
+        const pH = Math.max(2.6, b.floorHeight);
+        const postGeo = new THREE.BoxGeometry(0.22, pH, 0.22);
+        const xPosts =
+          b.width >= 9
+            ? [-b.width / 2 + 0.2, 0, b.width / 2 - 0.2]
+            : [-b.width / 2 + 0.2, b.width / 2 - 0.2];
+        for (const px of xPosts) {
+          for (const pz of [-b.depth / 2 + 0.2, b.depth / 2 - 0.2]) {
+            const post = new THREE.Mesh(postGeo, timberMat);
+            post.position.set(px, pH / 2, pz);
+            post.castShadow = true;
+            blockGroup.add(post);
+          }
+        }
+
+        // Çevre ana kirişler (aşıklar)
+        const beamFB = new THREE.BoxGeometry(b.width + 0.3, 0.2, 0.22);
+        const bFront = new THREE.Mesh(beamFB, timberMat);
+        bFront.position.set(0, pH, b.depth / 2 - 0.2);
+        const bBack = bFront.clone();
+        bBack.position.z = -b.depth / 2 + 0.2;
+        bFront.castShadow = true;
+        bBack.castShadow = true;
+        blockGroup.add(bFront, bBack);
+
+        // Üst güneş kırıcı pergola mertekleri
+        const rafterCount = Math.max(5, Math.round(b.width / 0.75));
+        const rafterGeo = new THREE.BoxGeometry(0.1, 0.18, b.depth + 0.45);
+        for (let r = 0; r < rafterCount; r++) {
+          const rx =
+            -b.width / 2 + (r / Math.max(1, rafterCount - 1)) * b.width;
+          const rafter = new THREE.Mesh(rafterGeo, timberMat);
+          rafter.position.set(rx, pH + 0.14, 0);
+          rafter.castShadow = true;
+          blockGroup.add(rafter);
+        }
+
+        if (isSelected) {
+          const selRing = new THREE.LineSegments(
+            new THREE.EdgesGeometry(new THREE.BoxGeometry(b.width + 0.8, 0.2, b.depth + 0.8)),
+            new THREE.LineBasicMaterial({ color: 0xc85a17 })
+          );
+          selRing.position.y = 0.15;
+          blockGroup.add(selRing);
+        }
+
+        orientedBuildingGroup.add(blockGroup);
+        selectableMeshesRef.current.push({ mesh: blockGroup, blockId: b.id });
+        continue;
+      }
 
       // ÖZEL ELEMAN 1: GERÇEKÇİ 3D MİNARE
       if (b.specialFeature === 'minaret') {
@@ -1168,17 +1302,85 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         continue;
       }
 
-      // Eğimli araziye gömülen betonarme/taş subasman & istinat bazası
-      const plinthGeo = new THREE.BoxGeometry(b.width + 0.3, plinthH, b.depth + 0.3);
+      // Dikey Y Kotu (+Y Havada Pilotis / 0m Subasman / -Y Zemin Altı Kuranglez) ve Bodrum Katları
       const plinthMat = new THREE.MeshStandardMaterial({
         color: 0x8c877e,
         roughness: 0.9,
       });
-      const plinthMesh = new THREE.Mesh(plinthGeo, plinthMat);
-      plinthMesh.position.y = -plinthH / 2;
-      plinthMesh.castShadow = true;
-      plinthMesh.receiveShadow = true;
-      blockGroup.add(plinthMesh);
+
+      if (bsmFloors > 0) {
+        const bsmH = bsmFloors * b.floorHeight;
+        const bsmGeo = new THREE.BoxGeometry(b.width + 0.16, bsmH, b.depth + 0.16);
+        const bsmMat = new THREE.MeshStandardMaterial({
+          color: 0x9b9589,
+          roughness: 0.88,
+        });
+        const bsmMesh = new THREE.Mesh(bsmGeo, bsmMat);
+        bsmMesh.position.y = -bsmH / 2;
+        blockGroup.add(bsmMesh);
+
+        const bsmEdges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(bsmGeo),
+          new THREE.LineBasicMaterial({ color: 0xc85a17 })
+        );
+        bsmEdges.position.y = -bsmH / 2;
+        blockGroup.add(bsmEdges);
+
+        // Bodrum kat ara döşeme çizgileri ve kuranglez pencereleri
+        const bsmWinMat = new THREE.MeshStandardMaterial({
+          color: 0x7dd3fc,
+          roughness: 0.2,
+          metalness: 0.4,
+        });
+        for (let bf = 1; bf <= bsmFloors; bf++) {
+          const by = -bf * b.floorHeight;
+          const bBand = new THREE.Mesh(
+            new THREE.BoxGeometry(b.width + 0.26, 0.14, b.depth + 0.26),
+            plinthMat
+          );
+          bBand.position.y = by;
+          blockGroup.add(bBand);
+
+          const kw = new THREE.Mesh(
+            new THREE.BoxGeometry(b.width * 0.65, 0.55, 0.12),
+            bsmWinMat
+          );
+          kw.position.set(0, by + b.floorHeight * 0.72, b.depth / 2 + 0.09);
+          blockGroup.add(kw);
+        }
+      } else if (yOff > 0.35) {
+        // +Y yukarı kaldırılmış kütle: Zemin kotuna inen taşıyıcı pilotis kolonları
+        const colH = yOff + 0.4;
+        const colGeo = new THREE.CylinderGeometry(0.28, 0.32, colH, 10);
+        for (const [cx, cz] of [
+          [-b.width * 0.4, -b.depth * 0.38],
+          [b.width * 0.4, -b.depth * 0.38],
+          [-b.width * 0.4, b.depth * 0.38],
+          [b.width * 0.4, b.depth * 0.38],
+        ]) {
+          const pCol = new THREE.Mesh(colGeo, plinthMat);
+          pCol.position.set(cx, -yOff + colH / 2 - 0.2, cz);
+          pCol.castShadow = true;
+          blockGroup.add(pCol);
+        }
+      } else if (yOff < -0.15) {
+        // -Y zemin altına çekilmiş gömülü kütle: Zemin yüzeyinde istinat/kuranglez kesit çerçevesi
+        const collarGeo = new THREE.BoxGeometry(b.width + 1.2, 0.35, b.depth + 1.2);
+        const collarEdges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(collarGeo),
+          new THREE.LineBasicMaterial({ color: 0x181816 })
+        );
+        collarEdges.position.y = -yOff;
+        blockGroup.add(collarEdges);
+      } else {
+        // Standart zemin oturtması: Eğimli araziye gömülen subasman & istinat bazası
+        const plinthGeo = new THREE.BoxGeometry(b.width + 0.3, plinthH, b.depth + 0.3);
+        const plinthMesh = new THREE.Mesh(plinthGeo, plinthMat);
+        plinthMesh.position.y = -plinthH / 2;
+        plinthMesh.castShadow = true;
+        plinthMesh.receiveShadow = true;
+        blockGroup.add(plinthMesh);
+      }
 
       const bodyGeo = new THREE.BoxGeometry(b.width, totalH, b.depth);
       const bodyMat = new THREE.MeshStandardMaterial({

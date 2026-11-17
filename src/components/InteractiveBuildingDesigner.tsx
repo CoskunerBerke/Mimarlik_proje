@@ -8,6 +8,8 @@ import {
   MousePointer,
   PenTool,
   Plus,
+  Redo2,
+  Undo2,
 } from 'lucide-react';
 
 interface InteractiveBuildingDesignerProps {
@@ -19,6 +21,10 @@ interface InteractiveBuildingDesignerProps {
   planUnderlay: PlanUnderlayData | null;
   prevailingWindLabel: string;
   recommendedUnitMassAvgKgM2: number;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 type DesignerTool = 'draw' | 'select';
@@ -59,6 +65,10 @@ export const InteractiveBuildingDesigner: React.FC<InteractiveBuildingDesignerPr
   planUnderlay,
   prevailingWindLabel,
   recommendedUnitMassAvgKgM2,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [tool, setTool] = useState<DesignerTool>('draw');
@@ -236,7 +246,7 @@ export const InteractiveBuildingDesigner: React.FC<InteractiveBuildingDesignerPr
   const totalBuiltAreaM2 = Math.round(
     blocks
       .filter((b) => b.specialFeature !== 'outdoor_pool' && b.specialFeature !== 'minaret')
-      .reduce((acc, b) => acc + b.width * b.depth * b.floors, 0)
+      .reduce((acc, b) => acc + b.width * b.depth * (b.floors + (b.basementFloors ?? 0)), 0)
   );
   const currentTaks = footprintAreaM2 / Math.max(1, parcelAreaM2);
   const isTaksValid = currentTaks <= site.maxTaks;
@@ -306,7 +316,30 @@ export const InteractiveBuildingDesigner: React.FC<InteractiveBuildingDesignerPr
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {onUndo && (
+            <button
+              type="button"
+              disabled={!canUndo}
+              onClick={onUndo}
+              className="px-2.5 py-1.5 bg-white hover:bg-stone-100 disabled:opacity-40 text-[#181816] border border-stone-300 font-semibold flex items-center gap-1"
+              title="Son işlemi geri al (Ctrl+Z)"
+            >
+              <Undo2 className="w-3.5 h-3.5 text-[#C85A17]" /> Geri Al
+            </button>
+          )}
+
+          {onRedo && canRedo && (
+            <button
+              type="button"
+              onClick={onRedo}
+              className="px-2.5 py-1.5 bg-white hover:bg-stone-100 text-[#181816] border border-stone-300 font-semibold flex items-center gap-1"
+              title="İleri al (Ctrl+Y)"
+            >
+              <Redo2 className="w-3.5 h-3.5" /> İleri Al
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
